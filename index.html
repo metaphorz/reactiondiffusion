@@ -216,9 +216,10 @@
             const [mobility, setMobility] = useState(0.3);
 
             // Visualization
-            const [colorScheme, setColorScheme] = useState('grayscale');
+            const [colorScheme, setColorScheme] = useState('rainbow');
             const [speed, setSpeed] = useState(1);
-            const [initialPattern, setInitialPattern] = useState('center');
+            const [initialPattern, setInitialPattern] = useState('random');
+            const [highContrast, setHighContrast] = useState(false);
 
             // Zoom and pan
             const [zoom, setZoom] = useState(1.0);
@@ -419,6 +420,7 @@
                                 zoom: f32,
                                 panX: f32,
                                 panY: f32,
+                                highContrast: u32,
                             }
 
                             @group(0) @binding(0) var<storage, read> gridB: array<f32>;
@@ -469,6 +471,16 @@
                                 return rgb + vec3<f32>(m, m, m);
                             }
 
+                            fn applyContrast(value: f32, enabled: bool) -> f32 {
+                                if (!enabled) {
+                                    return value;
+                                }
+                                // High contrast: emphasize differences using power curve
+                                let centered = (value - 0.5) * 2.0; // Map to [-1, 1]
+                                let boosted = sign(centered) * pow(abs(centered), 0.5); // Apply power curve
+                                return (boosted + 1.0) / 2.0; // Map back to [0, 1]
+                            }
+
                             @fragment
                             fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
                                 let gridSize = renderParams.gridSize;
@@ -491,7 +503,8 @@
                                 let wy = u32((gy + f32(gridSize * 1000)) % f32(gridSize));
                                 let idx = wy * gridSize + wx;
 
-                                let value = gridB[idx];
+                                let rawValue = gridB[idx];
+                                let value = applyContrast(rawValue, renderParams.highContrast != 0u);
 
                                 var color: vec3<f32>;
                                 if (renderParams.colorScheme == 0u) {
@@ -544,7 +557,7 @@
                     });
 
                     const renderParamsBuffer = device.createBuffer({
-                        size: 20, // 2 u32s + 3 f32s = 8 + 12 = 20 bytes
+                        size: 24, // 3 u32s + 3 f32s = 12 + 12 = 24 bytes
                         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
                     });
 
@@ -911,13 +924,14 @@
 
                     // Update render params with zoom/pan
                     const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'rainbow': 2, 'grayscale': 3 };
-                    const renderParamsData = new ArrayBuffer(20);
+                    const renderParamsData = new ArrayBuffer(24);
                     const renderView = new DataView(renderParamsData);
                     renderView.setUint32(0, gridSize, true);
                     renderView.setUint32(4, colorSchemeMap[colorScheme] || 0, true);
                     renderView.setFloat32(8, zoom, true);
                     renderView.setFloat32(12, panX, true);
                     renderView.setFloat32(16, panY, true);
+                    renderView.setUint32(20, highContrast ? 1 : 0, true);
                     device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
 
                     const commandEncoder = device.createCommandEncoder();
@@ -1068,11 +1082,21 @@
                 };
             };
 
+            const applyContrast = (value) => {
+                if (!highContrast) return value;
+                // High contrast: map [0,1] to emphasize differences
+                // Using a power curve: values near 0.5 get pushed to extremes
+                const centered = (value - 0.5) * 2; // Map to [-1, 1]
+                const boosted = Math.sign(centered) * Math.pow(Math.abs(centered), 0.5); // Apply power curve
+                return (boosted + 1) / 2; // Map back to [0, 1]
+            };
+
             const getColor = (value, scheme) => {
-                if (scheme === 'viridis') return viridisColor(value);
-                if (scheme === 'plasma') return plasmaColor(value);
-                if (scheme === 'rainbow') return rainbowColor(value);
-                return grayscaleColor(value);
+                const contrastValue = applyContrast(value);
+                if (scheme === 'viridis') return viridisColor(contrastValue);
+                if (scheme === 'plasma') return plasmaColor(contrastValue);
+                if (scheme === 'rainbow') return rainbowColor(contrastValue);
+                return grayscaleColor(contrastValue);
             };
 
             // CPU simulation step for both Gray-Scott and Diffusiophoresis models
@@ -1147,12 +1171,12 @@
                 }
             };
 
-            // Render when zoom/pan changes (even if not running)
+            // Render when zoom/pan/color/contrast changes (even if not running)
             useEffect(() => {
                 if (useBackend === 'gpu' && !gpuRef.current) return;
                 if (useBackend === 'cpu' && !cpuGridB.current) return;
                 renderFrame();
-            }, [zoom, panX, panY, colorScheme]);
+            }, [zoom, panX, panY, colorScheme, highContrast]);
 
             // Animation loop
             useEffect(() => {
@@ -1269,13 +1293,14 @@
 
                     // Update render params with zoom/pan
                     const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'rainbow': 2, 'grayscale': 3 };
-                    const renderParamsData = new ArrayBuffer(20);
+                    const renderParamsData = new ArrayBuffer(24);
                     const renderView = new DataView(renderParamsData);
                     renderView.setUint32(0, gridSize, true);
                     renderView.setUint32(4, colorSchemeMap[colorScheme] || 0, true);
                     renderView.setFloat32(8, zoom, true);
                     renderView.setFloat32(12, panX, true);
                     renderView.setFloat32(16, panY, true);
+                    renderView.setUint32(20, highContrast ? 1 : 0, true);
                     device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
 
                     // Render
@@ -1361,7 +1386,7 @@
                         cancelAnimationFrame(animationRef.current);
                     }
                 };
-            }, [isRunning, mode, useBackend, Du, Dv, feedRate, killRate, diffusionCoeff, gradientStrength, mobility, speed, colorScheme, gridSize, zoom, panX, panY]);
+            }, [isRunning, mode, useBackend, Du, Dv, feedRate, killRate, diffusionCoeff, gradientStrength, mobility, speed, colorScheme, gridSize, zoom, panX, panY, highContrast]);
 
             if (gpuError) {
                 return (
@@ -1598,6 +1623,18 @@
                                 <option value="rainbow">Rainbow (Full Spectrum)</option>
                                 <option value="grayscale">Grayscale</option>
                             </select>
+                        </div>
+
+                        <div className="control-group">
+                            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={highContrast}
+                                    onChange={(e) => setHighContrast(e.target.checked)}
+                                    style={{ marginRight: '8px', cursor: 'pointer' }}
+                                />
+                                High Contrast Mode
+                            </label>
                         </div>
 
                         <div className="control-group">
