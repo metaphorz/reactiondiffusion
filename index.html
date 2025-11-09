@@ -736,6 +736,10 @@
                     cpuGridB.current = gridB;
                     cpuNextGridA.current = new Float32Array(size);
                     cpuNextGridB.current = new Float32Array(size);
+                    console.log('✓ CPU grids initialized successfully');
+                    console.log('  Grid size:', gridSize, 'x', gridSize);
+                    console.log('  Total cells:', size);
+                    console.log('  Center value B:', gridB[Math.floor(size/2)]);
                 }
 
                 // Render the initial state
@@ -964,6 +968,8 @@
                 if (useBackend === 'cpu' && !cpuGridB.current) return;
                 if (!isRunning) return;
 
+                console.log('🎬 Animation loop starting...', 'Backend:', useBackend, 'Mode:', mode);
+
                 let frameCount = 0;
 
                 const animate = () => {
@@ -982,13 +988,13 @@
 
                         const afterValue = cpuGridB.current ? cpuGridB.current[centerIdx] : 'undefined';
 
-                        // Log CPU simulation state
-                        if (frameCount === 1 || frameCount % 120 === 0) {
+                        // Log CPU simulation state - more frequent logging for debugging
+                        if (frameCount <= 5 || frameCount % 60 === 0) {
                             const dt = 0.05 * speed;
                             console.log(`=== FRAME ${frameCount} (CPU) ===`);
                             console.log(`Parameters: Du=${Du}, Dv=${Dv}, F=${feedRate}, k=${killRate}, dt=${dt}`);
                             console.log('Mode:', mode);
-                            console.log(`CPU GridB center: before=${beforeValue.toFixed(6)}, after=${afterValue.toFixed(6)}`);
+                            console.log(`CPU GridB center: before=${typeof beforeValue === 'number' ? beforeValue.toFixed(6) : beforeValue}, after=${typeof afterValue === 'number' ? afterValue.toFixed(6) : afterValue}`);
 
                             // Sample a few more points to check spreading
                             const offset10 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 10;
