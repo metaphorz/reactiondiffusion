@@ -200,7 +200,7 @@
             const [isRunning, setIsRunning] = useState(false);
             const [mode, setMode] = useState('turing');
             const [useBackend, setUseBackend] = useState('cpu'); // 'cpu' or 'gpu' - default to CPU for testing
-            const [gridSize] = useState(256); // Smaller grid for testing, faster computation
+            const [gridSize] = useState(1024); // High resolution grid for detailed patterns
             const [gpuError, setGpuError] = useState(null);
 
             // Turing parameters - scaled for 1024 grid
