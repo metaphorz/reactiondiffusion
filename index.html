@@ -749,14 +749,33 @@
                 if (useBackend === 'cpu') {
                     // CPU rendering using Canvas 2D
                     const canvas = canvasRef.current;
-                    let ctx = canvas.getContext('2d');
+
+                    // Try to get 2D context, with better error handling
+                    let ctx = null;
+                    try {
+                        ctx = canvas.getContext('2d');
+                    } catch (e) {
+                        console.error('Failed to get 2D context:', e);
+                    }
 
                     // If canvas was configured for WebGPU, we can't get 2D context
-                    // We need to inform the user to reload
                     if (!ctx) {
-                        console.error('Cannot get 2D context - canvas is configured for WebGPU.');
-                        console.error('Please reload the page and select CPU mode before running.');
-                        return;
+                        console.error('Cannot get 2D context - canvas may be configured for WebGPU.');
+                        console.error('Attempting to recreate canvas...');
+
+                        // Try to recreate the canvas for 2D rendering
+                        const parent = canvas.parentElement;
+                        const newCanvas = document.createElement('canvas');
+                        newCanvas.width = gridSize;
+                        newCanvas.height = gridSize;
+                        parent.replaceChild(newCanvas, canvas);
+                        canvasRef.current = newCanvas;
+                        ctx = newCanvas.getContext('2d');
+
+                        if (!ctx) {
+                            console.error('Still cannot get 2D context. Please reload the page.');
+                            return;
+                        }
                     }
 
                     const imageData = ctx.createImageData(gridSize, gridSize);
@@ -880,7 +899,7 @@
                 return grayscaleColor(value);
             };
 
-            // CPU simulation step for Gray-Scott model
+            // CPU simulation step for both Gray-Scott and Diffusiophoresis models
             const stepCPU = () => {
                 if (!cpuGridA.current || !cpuGridB.current) {
                     console.error('CPU grids not initialized!');
@@ -907,10 +926,30 @@
                         const laplaceB = cpuGridB.current[left] + cpuGridB.current[right] +
                                         cpuGridB.current[up] + cpuGridB.current[down] - 4 * b;
 
-                        // Gray-Scott equations
-                        const reaction = a * b * b;
-                        cpuNextGridA.current[idx] = a + (Du * laplaceA - reaction + feedRate * (1 - a)) * dt;
-                        cpuNextGridB.current[idx] = b + (Dv * laplaceB + reaction - (killRate + feedRate) * b) * dt;
+                        let newA, newB;
+
+                        if (mode === 'turing') {
+                            // Gray-Scott equations
+                            const reaction = a * b * b;
+                            newA = a + (Du * laplaceA - reaction + feedRate * (1 - a)) * dt;
+                            newB = b + (Dv * laplaceB + reaction - (killRate + feedRate) * b) * dt;
+                        } else {
+                            // Diffusiophoresis
+                            // Gradient calculation
+                            const gradX = (cpuGridA.current[right] - cpuGridA.current[left]) * 0.5;
+                            const gradY = (cpuGridA.current[down] - cpuGridA.current[up]) * 0.5;
+                            const gradMag = Math.sqrt(gradX * gradX + gradY * gradY);
+
+                            // Phoretic effect
+                            const phoretic = gradientStrength * gradMag * b;
+
+                            newA = a + diffusionCoeff * laplaceA * dt;
+                            newB = b + (diffusionCoeff * 0.5 * laplaceB + mobility * phoretic) * dt;
+                        }
+
+                        // Clamp values to [0, 1] for stability (matching GPU shader behavior)
+                        cpuNextGridA.current[idx] = Math.max(0, Math.min(1, newA));
+                        cpuNextGridB.current[idx] = Math.max(0, Math.min(1, newB));
                     }
                 }
 
@@ -1155,12 +1194,25 @@
                         <div className="control-group">
                             <label>Backend</label>
                             <select value={useBackend} onChange={(e) => {
-                                setUseBackend(e.target.value);
+                                const newBackend = e.target.value;
                                 setIsRunning(false);
-                                initializeGrids();
+
+                                // If switching to CPU from GPU, recreate canvas for 2D context
+                                if (newBackend === 'cpu' && useBackend === 'gpu') {
+                                    const canvas = canvasRef.current;
+                                    const parent = canvas.parentElement;
+                                    const newCanvas = document.createElement('canvas');
+                                    newCanvas.width = gridSize;
+                                    newCanvas.height = gridSize;
+                                    parent.replaceChild(newCanvas, canvas);
+                                    canvasRef.current = newCanvas;
+                                    gpuRef.current = null; // Clear GPU resources
+                                }
+
+                                setUseBackend(newBackend);
                             }}>
-                                <option value="gpu">GPU (WebGPU)</option>
                                 <option value="cpu">CPU (JavaScript)</option>
+                                <option value="gpu">GPU (WebGPU)</option>
                             </select>
                         </div>
 
