@@ -954,12 +954,25 @@
                         // Clamp values to [0, 1] for stability (matching GPU shader behavior)
                         cpuNextGridA.current[idx] = Math.max(0, Math.min(1, newA));
                         cpuNextGridB.current[idx] = Math.max(0, Math.min(1, newB));
+
+                        // Debug: check if values are being clamped properly
+                        if (idx === Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2)) {
+                            if (newA > 1.0 || newB > 1.0 || newA < 0 || newB < 0) {
+                                console.warn(`⚠️ Clamping at center: newA=${newA.toFixed(6)}, newB=${newB.toFixed(6)} → clamped A=${cpuNextGridA.current[idx].toFixed(6)}, B=${cpuNextGridB.current[idx].toFixed(6)}`);
+                            }
+                        }
                     }
                 }
 
                 // Swap buffers (ping-pong)
                 [cpuGridA.current, cpuNextGridA.current] = [cpuNextGridA.current, cpuGridA.current];
                 [cpuGridB.current, cpuNextGridB.current] = [cpuNextGridB.current, cpuGridB.current];
+
+                // Debug: check values after swap
+                const centerIdx = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2);
+                if (cpuGridB.current[centerIdx] > 1.0 || cpuGridB.current[centerIdx] < 0) {
+                    console.error(`❌ After swap, center value is OUT OF BOUNDS: ${cpuGridB.current[centerIdx]}`);
+                }
             };
 
             // Animation loop
