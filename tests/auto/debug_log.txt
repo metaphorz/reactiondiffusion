@@ -1,0 +1,51 @@
+GPU Reaction-Diffusion Debug Log
+==================================
+
+Issue: Pattern disappears immediately when simulation starts
+Status: UNRESOLVED after multiple fix attempts
+
+## Attempts Made:
+
+1. Fixed buffer usage flags (COPY_SRC | COPY_DST bidirectional)
+2. Added bounds checking in fragment shader
+3. Added initial render call after grid initialization
+4. Reduced timestep from 1.0 -> 0.5 -> 0.2 -> 0.01
+5. Removed speed loop, now single compute pass per frame
+6. Added small background noise (0.01) to all cells
+7. Changed initial seed from hard 0/1 to smooth gradient
+8. Scaled diffusion parameters for 512x512 grid
+   - Du: 0.16 -> 0.2097
+   - Dv: 0.08 -> 0.105
+   - F: 0.055 -> 0.037
+   - k: 0.062 -> 0.06
+9. Set timestep to 0.5 * speed
+
+## Current Parameters:
+- Grid: 512x512
+- du: 0.2097
+- Dv: 0.1050
+- Feed: 0.037
+- Kill: 0.06
+- dt: 0.5
+
+## Observations:
+- Initial pattern renders correctly (white spot on purple background)
+- When Play is pressed, spot disappears within 1 frame
+- Canvas becomes solid purple (viridis color for value ~0)
+- No console errors
+- WebGPU initializes successfully
+
+## Potential Issues:
+1. Timestep still too large for numerical stability
+2. Grid scaling not correct for 512x512
+3. Compute shader may have subtle bug
+4. Buffer synchronization issue
+5. Initial conditions being consumed too quickly by reaction term
+
+## Next Steps to Try:
+1. Reduce timestep to 0.01 or smaller
+2. Try different initial patterns (Random, Grid) with more seeds
+3. Add console logging to track buffer values
+4. Try smaller grid size (256x256) with original parameters
+5. Verify compute shader math against reference implementation
+6. Check if issue exists with simpler test (diffusion only, no reaction)

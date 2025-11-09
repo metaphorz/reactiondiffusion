@@ -1,0 +1,1360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reaction-Diffusion Simulator (GPU Accelerated)</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        #root {
+            width: 100%;
+            max-width: 1400px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .canvas-container {
+            flex: 1;
+            min-width: 300px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        canvas {
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+            background: #000;
+        }
+
+        .controls {
+            width: 350px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            font-size: 24px;
+            color: #fff;
+        }
+
+        .gpu-badge {
+            display: inline-block;
+            background: #00ff88;
+            color: #000;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-bottom: 15px;
+        }
+
+        h2 {
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 18px;
+            color: #4a9eff;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            color: #b0b0b0;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 4px;
+            border-radius: 2px;
+            background: #444;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #4a9eff;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #4a9eff;
+            cursor: pointer;
+            border: none;
+        }
+
+        select, button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #333;
+            color: #e0e0e0;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        button {
+            background: #4a9eff;
+            color: #fff;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #3a8eef;
+        }
+
+        button.secondary {
+            background: #555;
+        }
+
+        button.secondary:hover {
+            background: #666;
+        }
+
+        .value-display {
+            display: inline-block;
+            float: right;
+            color: #4a9eff;
+            font-weight: 600;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .button-group button {
+            flex: 1;
+        }
+
+        .error-message {
+            background: #ff4444;
+            color: #fff;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        function ReactionDiffusionSimulator() {
+            const canvasRef = useRef(null);
+            const animationRef = useRef(null);
+            const gpuRef = useRef(null);
+
+            // CPU simulation grids
+            const cpuGridA = useRef(null);
+            const cpuGridB = useRef(null);
+            const cpuNextGridA = useRef(null);
+            const cpuNextGridB = useRef(null);
+
+            // Simulation state
+            const [isRunning, setIsRunning] = useState(false);
+            const [mode, setMode] = useState('turing');
+            const [useBackend, setUseBackend] = useState('cpu'); // 'cpu' or 'gpu' - default to CPU for testing
+            const [gridSize] = useState(256); // Smaller grid for testing, faster computation
+            const [gpuError, setGpuError] = useState(null);
+
+            // Turing parameters - scaled for 1024 grid
+            // Much smaller timestep needed for stability on fine grid
+            const [Du, setDu] = useState(0.16);
+            const [Dv, setDv] = useState(0.08);
+            const [feedRate, setFeedRate] = useState(0.062);
+            const [killRate, setKillRate] = useState(0.06);
+
+            // Diffusiophoresis parameters
+            const [diffusionCoeff, setDiffusionCoeff] = useState(0.1);
+            const [gradientStrength, setGradientStrength] = useState(0.5);
+            const [mobility, setMobility] = useState(0.3);
+
+            // Visualization
+            const [colorScheme, setColorScheme] = useState('grayscale');
+            const [speed, setSpeed] = useState(1);
+            const [initialPattern, setInitialPattern] = useState('center');
+
+            // Initialize WebGPU only if using GPU backend
+            useEffect(() => {
+                if (useBackend === 'gpu') {
+                    initWebGPU();
+                } else {
+                    // CPU mode - just initialize grids directly
+                    initializeGrids();
+                }
+            }, [useBackend]);
+
+            const initWebGPU = async () => {
+                try {
+                    if (!navigator.gpu) {
+                        throw new Error('WebGPU not supported. Please use Chrome/Edge 113+ or Safari 18+');
+                    }
+
+                    const adapter = await navigator.gpu.requestAdapter();
+                    if (!adapter) {
+                        throw new Error('No GPU adapter found');
+                    }
+
+                    const device = await adapter.requestDevice();
+                    const canvas = canvasRef.current;
+                    const context = canvas.getContext('webgpu');
+
+                    const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+                    context.configure({
+                        device,
+                        format: presentationFormat,
+                        alphaMode: 'opaque',
+                    });
+
+                    // Create compute shader for Gray-Scott
+                    const grayScottShader = device.createShaderModule({
+                        code: `
+                            struct Params {
+                                gridSize: u32,
+                                Du: f32,
+                                Dv: f32,
+                                feedRate: f32,
+                                killRate: f32,
+                                dt: f32,
+                            }
+
+                            @group(0) @binding(0) var<storage, read> gridA: array<f32>;
+                            @group(0) @binding(1) var<storage, read> gridB: array<f32>;
+                            @group(0) @binding(2) var<storage, read_write> nextGridA: array<f32>;
+                            @group(0) @binding(3) var<storage, read_write> nextGridB: array<f32>;
+                            @group(0) @binding(4) var<uniform> params: Params;
+
+                            @compute @workgroup_size(8, 8)
+                            fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                                let x = global_id.x;
+                                let y = global_id.y;
+                                let gridSize = params.gridSize;
+
+                                if (x >= gridSize || y >= gridSize) {
+                                    return;
+                                }
+
+                                let idx = y * gridSize + x;
+
+                                // Neighbors with periodic boundary conditions
+                                let left = y * gridSize + ((x + gridSize - 1u) % gridSize);
+                                let right = y * gridSize + ((x + 1u) % gridSize);
+                                let up = ((y + gridSize - 1u) % gridSize) * gridSize + x;
+                                let down = ((y + 1u) % gridSize) * gridSize + x;
+
+                                let a = gridA[idx];
+                                let b = gridB[idx];
+
+                                // Laplacian
+                                let laplaceA = gridA[left] + gridA[right] + gridA[up] + gridA[down] - 4.0 * a;
+                                let laplaceB = gridB[left] + gridB[right] + gridB[up] + gridB[down] - 4.0 * b;
+
+                                // Gray-Scott equations
+                                let reaction = a * b * b;
+                                let newA = a + (params.Du * laplaceA - reaction + params.feedRate * (1.0 - a)) * params.dt;
+                                let newB = b + (params.Dv * laplaceB + reaction - (params.killRate + params.feedRate) * b) * params.dt;
+
+                                nextGridA[idx] = clamp(newA, 0.0, 1.0);
+                                nextGridB[idx] = clamp(newB, 0.0, 1.0);
+                            }
+                        `
+                    });
+
+                    // Create compute shader for Diffusiophoresis
+                    const diffusiophoresisSha = device.createShaderModule({
+                        code: `
+                            struct Params {
+                                gridSize: u32,
+                                diffusionCoeff: f32,
+                                gradientStrength: f32,
+                                mobility: f32,
+                                dt: f32,
+                            }
+
+                            @group(0) @binding(0) var<storage, read> gridA: array<f32>;
+                            @group(0) @binding(1) var<storage, read> gridB: array<f32>;
+                            @group(0) @binding(2) var<storage, read_write> nextGridA: array<f32>;
+                            @group(0) @binding(3) var<storage, read_write> nextGridB: array<f32>;
+                            @group(0) @binding(4) var<uniform> params: Params;
+
+                            @compute @workgroup_size(8, 8)
+                            fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                                let x = global_id.x;
+                                let y = global_id.y;
+                                let gridSize = params.gridSize;
+
+                                if (x >= gridSize || y >= gridSize) {
+                                    return;
+                                }
+
+                                let idx = y * gridSize + x;
+
+                                let left = y * gridSize + ((x + gridSize - 1u) % gridSize);
+                                let right = y * gridSize + ((x + 1u) % gridSize);
+                                let up = ((y + gridSize - 1u) % gridSize) * gridSize + x;
+                                let down = ((y + 1u) % gridSize) * gridSize + x;
+
+                                let a = gridA[idx];
+                                let b = gridB[idx];
+
+                                let laplaceA = gridA[left] + gridA[right] + gridA[up] + gridA[down] - 4.0 * a;
+                                let laplaceB = gridB[left] + gridB[right] + gridB[up] + gridB[down] - 4.0 * b;
+
+                                // Gradient calculation
+                                let gradX = (gridA[right] - gridA[left]) * 0.5;
+                                let gradY = (gridA[down] - gridA[up]) * 0.5;
+                                let gradMag = sqrt(gradX * gradX + gradY * gradY);
+
+                                // Diffusiophoresis
+                                let phoretic = params.gradientStrength * gradMag * b;
+
+                                let newA = a + params.diffusionCoeff * laplaceA * params.dt;
+                                let newB = b + (params.diffusionCoeff * 0.5 * laplaceB + params.mobility * phoretic) * params.dt;
+
+                                nextGridA[idx] = clamp(newA, 0.0, 1.0);
+                                nextGridB[idx] = clamp(newB, 0.0, 1.0);
+                            }
+                        `
+                    });
+
+                    // Create render shader
+                    const renderShader = device.createShaderModule({
+                        code: `
+                            struct VertexOutput {
+                                @builtin(position) position: vec4<f32>,
+                                @location(0) texCoord: vec2<f32>,
+                            }
+
+                            @vertex
+                            fn vertexMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+                                var pos = array<vec2<f32>, 6>(
+                                    vec2<f32>(-1.0, -1.0),
+                                    vec2<f32>(1.0, -1.0),
+                                    vec2<f32>(-1.0, 1.0),
+                                    vec2<f32>(-1.0, 1.0),
+                                    vec2<f32>(1.0, -1.0),
+                                    vec2<f32>(1.0, 1.0)
+                                );
+
+                                var texCoord = array<vec2<f32>, 6>(
+                                    vec2<f32>(0.0, 1.0),
+                                    vec2<f32>(1.0, 1.0),
+                                    vec2<f32>(0.0, 0.0),
+                                    vec2<f32>(0.0, 0.0),
+                                    vec2<f32>(1.0, 1.0),
+                                    vec2<f32>(1.0, 0.0)
+                                );
+
+                                var output: VertexOutput;
+                                output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
+                                output.texCoord = texCoord[vertexIndex];
+                                return output;
+                            }
+
+                            struct RenderParams {
+                                gridSize: u32,
+                                colorScheme: u32,
+                            }
+
+                            @group(0) @binding(0) var<storage, read> gridB: array<f32>;
+                            @group(0) @binding(1) var<uniform> renderParams: RenderParams;
+
+                            fn viridis(t: f32) -> vec3<f32> {
+                                let c0 = vec3<f32>(0.267004, 0.004874, 0.329415);
+                                let c1 = vec3<f32>(0.127568, 0.566949, 0.550556);
+                                let c2 = vec3<f32>(0.993248, 0.906157, 0.143936);
+
+                                let t2 = t * t;
+                                let t3 = t2 * t;
+                                return c0 + c1 * t + c2 * t2;
+                            }
+
+                            fn plasma(t: f32) -> vec3<f32> {
+                                let c0 = vec3<f32>(0.050383, 0.029803, 0.527975);
+                                let c1 = vec3<f32>(0.759954, 0.513937, 0.424850);
+                                let c2 = vec3<f32>(0.940015, 0.750425, 0.015609);
+
+                                let t2 = t * t;
+                                return c0 + c1 * t + c2 * t2;
+                            }
+
+                            @fragment
+                            fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+                                let gridSize = renderParams.gridSize;
+                                let x = min(u32(input.texCoord.x * f32(gridSize)), gridSize - 1u);
+                                let y = min(u32(input.texCoord.y * f32(gridSize)), gridSize - 1u);
+                                let idx = y * gridSize + x;
+
+                                let value = gridB[idx];
+
+                                var color: vec3<f32>;
+                                if (renderParams.colorScheme == 0u) {
+                                    color = viridis(value);
+                                } else if (renderParams.colorScheme == 1u) {
+                                    color = plasma(value);
+                                } else {
+                                    color = vec3<f32>(value, value, value);
+                                }
+
+                                return vec4<f32>(color, 1.0);
+                            }
+                        `
+                    });
+
+                    // Create buffers
+                    const bufferSize = gridSize * gridSize * 4; // Float32
+
+                    const gridABuffer = device.createBuffer({
+                        size: bufferSize,
+                        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+                    });
+
+                    const gridBBuffer = device.createBuffer({
+                        size: bufferSize,
+                        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+                    });
+
+                    const nextGridABuffer = device.createBuffer({
+                        size: bufferSize,
+                        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+                    });
+
+                    const nextGridBBuffer = device.createBuffer({
+                        size: bufferSize,
+                        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+                    });
+
+                    // Params buffers
+                    const grayScottParamsBuffer = device.createBuffer({
+                        size: 24, // 6 floats
+                        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                    });
+
+                    const diffusiophoresisPramsBuffer = device.createBuffer({
+                        size: 20, // 5 floats
+                        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                    });
+
+                    const renderParamsBuffer = device.createBuffer({
+                        size: 8, // 2 u32s
+                        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                    });
+
+                    // Create compute pipelines
+                    const grayScottPipeline = device.createComputePipeline({
+                        layout: 'auto',
+                        compute: {
+                            module: grayScottShader,
+                            entryPoint: 'main',
+                        }
+                    });
+
+                    const diffusiophoresisPipeline = device.createComputePipeline({
+                        layout: 'auto',
+                        compute: {
+                            module: diffusiophoresisSha,
+                            entryPoint: 'main',
+                        }
+                    });
+
+                    // Create bind groups
+                    const grayScottBindGroup = device.createBindGroup({
+                        layout: grayScottPipeline.getBindGroupLayout(0),
+                        entries: [
+                            { binding: 0, resource: { buffer: gridABuffer } },
+                            { binding: 1, resource: { buffer: gridBBuffer } },
+                            { binding: 2, resource: { buffer: nextGridABuffer } },
+                            { binding: 3, resource: { buffer: nextGridBBuffer } },
+                            { binding: 4, resource: { buffer: grayScottParamsBuffer } },
+                        ],
+                    });
+
+                    const diffusiophoresiBindGroup = device.createBindGroup({
+                        layout: diffusiophoresisPipeline.getBindGroupLayout(0),
+                        entries: [
+                            { binding: 0, resource: { buffer: gridABuffer } },
+                            { binding: 1, resource: { buffer: gridBBuffer } },
+                            { binding: 2, resource: { buffer: nextGridABuffer } },
+                            { binding: 3, resource: { buffer: nextGridBBuffer } },
+                            { binding: 4, resource: { buffer: diffusiophoresisPramsBuffer } },
+                        ],
+                    });
+
+                    // Create render pipeline
+                    const renderPipeline = device.createRenderPipeline({
+                        layout: 'auto',
+                        vertex: {
+                            module: renderShader,
+                            entryPoint: 'vertexMain',
+                        },
+                        fragment: {
+                            module: renderShader,
+                            entryPoint: 'fragmentMain',
+                            targets: [{
+                                format: presentationFormat,
+                            }],
+                        },
+                        primitive: {
+                            topology: 'triangle-list',
+                        },
+                    });
+
+                    const renderBindGroup = device.createBindGroup({
+                        layout: renderPipeline.getBindGroupLayout(0),
+                        entries: [
+                            { binding: 0, resource: { buffer: gridBBuffer } },
+                            { binding: 1, resource: { buffer: renderParamsBuffer } },
+                        ],
+                    });
+
+                    gpuRef.current = {
+                        device,
+                        context,
+                        gridABuffer,
+                        gridBBuffer,
+                        nextGridABuffer,
+                        nextGridBBuffer,
+                        grayScottParamsBuffer,
+                        diffusiophoresisPramsBuffer,
+                        renderParamsBuffer,
+                        grayScottPipeline,
+                        diffusiophoresisPipeline,
+                        renderPipeline,
+                        grayScottBindGroup,
+                        diffusiophoresiBindGroup,
+                        renderBindGroup,
+                    };
+
+                    initializeGrids();
+                } catch (error) {
+                    console.error('WebGPU initialization failed:', error);
+                    setGpuError(error.message);
+                }
+            };
+
+            const initializeGrids = (pattern = initialPattern) => {
+                if (useBackend === 'gpu' && !gpuRef.current) return;
+
+                const size = gridSize * gridSize;
+                const gridA = new Float32Array(size);
+                const gridB = new Float32Array(size);
+
+                // Initialize base state
+                for (let i = 0; i < size; i++) {
+                    gridA[i] = 1.0;
+                    gridB[i] = 0.0;
+                }
+
+                const seedRadius = 50; // Larger seed for 1024 grid
+
+                switch(pattern) {
+                    case 'center':
+                        // Single spot in center
+                        const centerX = Math.floor(gridSize / 2);
+                        const centerY = Math.floor(gridSize / 2);
+                        for (let dy = -seedRadius; dy <= seedRadius; dy++) {
+                            for (let dx = -seedRadius; dx <= seedRadius; dx++) {
+                                if (dx * dx + dy * dy <= seedRadius * seedRadius) {
+                                    const x = (centerX + dx + gridSize) % gridSize;
+                                    const y = (centerY + dy + gridSize) % gridSize;
+                                    const idx = y * gridSize + x;
+                                    gridB[idx] = 1.0;
+                                }
+                            }
+                        }
+                        break;
+
+                    case 'random':
+                        // Random noise with higher density for pattern formation
+                        for (let i = 0; i < size; i++) {
+                            if (Math.random() < 0.3) {
+                                gridB[i] = 0.5 + Math.random() * 0.5; // 0.5 to 1.0
+                            }
+                        }
+                        break;
+
+                    case 'grid':
+                        // Grid pattern
+                        const spacing = 320;
+                        const gridSpotRadius = 40;
+                        for (let y = 0; y < gridSize; y += spacing) {
+                            for (let x = 0; x < gridSize; x += spacing) {
+                                for (let dy = -gridSpotRadius; dy <= gridSpotRadius; dy++) {
+                                    for (let dx = -gridSpotRadius; dx <= gridSpotRadius; dx++) {
+                                        if (dx * dx + dy * dy <= gridSpotRadius * gridSpotRadius) {
+                                            const px = (x + dx + gridSize) % gridSize;
+                                            const py = (y + dy + gridSize) % gridSize;
+                                            const idx = py * gridSize + px;
+                                            gridB[idx] = 1.0;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    case 'stripes':
+                        // Vertical stripes
+                        for (let y = 0; y < gridSize; y++) {
+                            for (let x = 0; x < gridSize; x++) {
+                                if ((x % 240) < 60) {
+                                    const idx = y * gridSize + x;
+                                    gridB[idx] = 1.0;
+                                }
+                            }
+                        }
+                        break;
+
+                    case 'corners':
+                        // Four corners
+                        const offset = 200;
+                        const corners = [
+                            [offset, offset],
+                            [gridSize - offset, offset],
+                            [offset, gridSize - offset],
+                            [gridSize - offset, gridSize - offset]
+                        ];
+                        for (const [cx, cy] of corners) {
+                            for (let dy = -seedRadius; dy <= seedRadius; dy++) {
+                                for (let dx = -seedRadius; dx <= seedRadius; dx++) {
+                                    if (dx * dx + dy * dy <= seedRadius * seedRadius) {
+                                        const x = (cx + dx + gridSize) % gridSize;
+                                        const y = (cy + dy + gridSize) % gridSize;
+                                        const idx = y * gridSize + x;
+                                        gridB[idx] = 1.0;
+                                    }
+                                }
+                            }
+                        }
+                        break;
+
+                    case 'ring':
+                        // Ring pattern
+                        const ringCenterX = Math.floor(gridSize / 2);
+                        const ringCenterY = Math.floor(gridSize / 2);
+                        const ringRadius = 200;
+                        const ringWidth = 40;
+                        for (let y = 0; y < gridSize; y++) {
+                            for (let x = 0; x < gridSize; x++) {
+                                const dx = x - ringCenterX;
+                                const dy = y - ringCenterY;
+                                const dist = Math.sqrt(dx * dx + dy * dy);
+                                if (Math.abs(dist - ringRadius) < ringWidth) {
+                                    const idx = y * gridSize + x;
+                                    gridB[idx] = 1.0;
+                                }
+                            }
+                        }
+                        break;
+
+                    case 'diagonal':
+                        // Diagonal stripe
+                        for (let y = 0; y < gridSize; y++) {
+                            for (let x = 0; x < gridSize; x++) {
+                                if (Math.abs((x - y + gridSize) % gridSize) < 60) {
+                                    const idx = y * gridSize + x;
+                                    gridB[idx] = 1.0;
+                                }
+                            }
+                        }
+                        break;
+                }
+
+                // Log initial values for debugging
+                console.log('=== GRID INITIALIZATION ===');
+                console.log('Backend:', useBackend.toUpperCase());
+                console.log('Grid size:', gridSize);
+                console.log('Total cells:', gridSize * gridSize);
+                console.log('Center index:', Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2));
+                console.log('GridA sample (center):', gridA[Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2)]);
+                console.log('GridB sample (center):', gridB[Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2)]);
+
+                // Find min/max without spread operator (to avoid stack overflow on large grids)
+                let minB = gridB[0], maxB = gridB[0], sumB = 0;
+                for (let i = 0; i < gridB.length; i++) {
+                    if (gridB[i] < minB) minB = gridB[i];
+                    if (gridB[i] > maxB) maxB = gridB[i];
+                    sumB += gridB[i];
+                }
+                console.log('GridB min:', minB);
+                console.log('GridB max:', maxB);
+                console.log('GridB average:', sumB / gridB.length);
+
+                if (useBackend === 'gpu') {
+                    const { device, gridABuffer, gridBBuffer } = gpuRef.current;
+                    device.queue.writeBuffer(gridABuffer, 0, gridA);
+                    device.queue.writeBuffer(gridBBuffer, 0, gridB);
+                } else {
+                    // CPU mode
+                    cpuGridA.current = gridA;
+                    cpuGridB.current = gridB;
+                    cpuNextGridA.current = new Float32Array(size);
+                    cpuNextGridB.current = new Float32Array(size);
+                }
+
+                // Render the initial state
+                renderFrame();
+            };
+
+            const renderFrame = () => {
+                if (useBackend === 'gpu' && !gpuRef.current) return;
+                if (useBackend === 'cpu' && !cpuGridB.current) return;
+
+                if (useBackend === 'cpu') {
+                    // CPU rendering using Canvas 2D
+                    const canvas = canvasRef.current;
+                    let ctx = canvas.getContext('2d');
+
+                    // If canvas was configured for WebGPU, we can't get 2D context
+                    // We need to inform the user to reload
+                    if (!ctx) {
+                        console.error('Cannot get 2D context - canvas is configured for WebGPU.');
+                        console.error('Please reload the page and select CPU mode before running.');
+                        return;
+                    }
+
+                    const imageData = ctx.createImageData(gridSize, gridSize);
+                    const data = imageData.data;
+
+                    for (let i = 0; i < gridSize * gridSize; i++) {
+                        const b = cpuGridB.current[i];
+                        const color = getColor(b, colorScheme);
+                        data[i * 4] = color.r;
+                        data[i * 4 + 1] = color.g;
+                        data[i * 4 + 2] = color.b;
+                        data[i * 4 + 3] = 255;
+                    }
+                    ctx.putImageData(imageData, 0, 0);
+                } else {
+                    // GPU rendering using WebGPU
+                    const {
+                        device,
+                        context,
+                        gridBBuffer,
+                        renderParamsBuffer,
+                        renderPipeline,
+                        renderBindGroup,
+                    } = gpuRef.current;
+
+                    // Update render params
+                    const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'grayscale': 2 };
+                    device.queue.writeBuffer(
+                        renderParamsBuffer,
+                        0,
+                        new Uint32Array([gridSize, colorSchemeMap[colorScheme] || 0])
+                    );
+
+                    const commandEncoder = device.createCommandEncoder();
+                    const renderPass = commandEncoder.beginRenderPass({
+                        colorAttachments: [{
+                            view: context.getCurrentTexture().createView(),
+                            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                            loadOp: 'clear',
+                            storeOp: 'store',
+                        }],
+                    });
+                    renderPass.setPipeline(renderPipeline);
+                    renderPass.setBindGroup(0, renderBindGroup);
+                    renderPass.draw(6);
+                    renderPass.end();
+
+                    device.queue.submit([commandEncoder.finish()]);
+                }
+            };
+
+            const reset = () => {
+                setIsRunning(false);
+                initializeGrids();
+            };
+
+            const applyPreset = (preset) => {
+                // Gray-Scott parameters - standard diffusion works on all grid sizes
+                switch(preset) {
+                    case 'spots':
+                        setDu(0.16);
+                        setDv(0.08);
+                        setFeedRate(0.062);  // Growth regime
+                        setKillRate(0.06);
+                        break;
+                    case 'stripes':
+                        setDu(0.16);
+                        setDv(0.08);
+                        setFeedRate(0.035);  // Maze patterns
+                        setKillRate(0.065);
+                        break;
+                    case 'waves':
+                        setDu(0.16);
+                        setDv(0.08);
+                        setFeedRate(0.014);  // Wave patterns
+                        setKillRate(0.054);
+                        break;
+                    case 'spirals':
+                        setDu(0.16);
+                        setDv(0.08);
+                        setFeedRate(0.018);  // Spiral patterns
+                        setKillRate(0.051);
+                        break;
+                }
+                reset();
+            };
+
+            // Color scheme functions for CPU rendering
+            const viridisColor = (t) => {
+                const c0 = [0.267004, 0.004874, 0.329415];
+                const c1 = [0.127568, 0.566949, 0.550556];
+                const c2 = [0.993248, 0.906157, 0.143936];
+                const t2 = t * t;
+                return {
+                    r: Math.floor((c0[0] + c1[0] * t + c2[0] * t2) * 255),
+                    g: Math.floor((c0[1] + c1[1] * t + c2[1] * t2) * 255),
+                    b: Math.floor((c0[2] + c1[2] * t + c2[2] * t2) * 255)
+                };
+            };
+
+            const plasmaColor = (t) => {
+                const c0 = [0.050383, 0.029803, 0.527975];
+                const c1 = [0.759954, 0.513937, 0.424850];
+                const c2 = [0.940015, 0.750425, 0.015609];
+                const t2 = t * t;
+                return {
+                    r: Math.floor((c0[0] + c1[0] * t + c2[0] * t2) * 255),
+                    g: Math.floor((c0[1] + c1[1] * t + c2[1] * t2) * 255),
+                    b: Math.floor((c0[2] + c1[2] * t + c2[2] * t2) * 255)
+                };
+            };
+
+            const grayscaleColor = (t) => {
+                const val = Math.floor(t * 255);
+                return { r: val, g: val, b: val };
+            };
+
+            const getColor = (value, scheme) => {
+                if (scheme === 'viridis') return viridisColor(value);
+                if (scheme === 'plasma') return plasmaColor(value);
+                return grayscaleColor(value);
+            };
+
+            // CPU simulation step for Gray-Scott model
+            const stepCPU = () => {
+                if (!cpuGridA.current || !cpuGridB.current) {
+                    console.error('CPU grids not initialized!');
+                    return;
+                }
+
+                // Much smaller timestep for 1024 grid stability
+                const dt = 0.05 * speed;
+
+                for (let y = 0; y < gridSize; y++) {
+                    for (let x = 0; x < gridSize; x++) {
+                        const idx = y * gridSize + x;
+                        const left = y * gridSize + ((x - 1 + gridSize) % gridSize);
+                        const right = y * gridSize + ((x + 1) % gridSize);
+                        const up = ((y - 1 + gridSize) % gridSize) * gridSize + x;
+                        const down = ((y + 1) % gridSize) * gridSize + x;
+
+                        const a = cpuGridA.current[idx];
+                        const b = cpuGridB.current[idx];
+
+                        // Laplacian calculation
+                        const laplaceA = cpuGridA.current[left] + cpuGridA.current[right] +
+                                        cpuGridA.current[up] + cpuGridA.current[down] - 4 * a;
+                        const laplaceB = cpuGridB.current[left] + cpuGridB.current[right] +
+                                        cpuGridB.current[up] + cpuGridB.current[down] - 4 * b;
+
+                        // Gray-Scott equations
+                        const reaction = a * b * b;
+                        cpuNextGridA.current[idx] = a + (Du * laplaceA - reaction + feedRate * (1 - a)) * dt;
+                        cpuNextGridB.current[idx] = b + (Dv * laplaceB + reaction - (killRate + feedRate) * b) * dt;
+                    }
+                }
+
+                // Swap buffers (ping-pong)
+                [cpuGridA.current, cpuNextGridA.current] = [cpuNextGridA.current, cpuGridA.current];
+                [cpuGridB.current, cpuNextGridB.current] = [cpuNextGridB.current, cpuGridB.current];
+            };
+
+            // Animation loop
+            useEffect(() => {
+                if (useBackend === 'gpu' && !gpuRef.current) return;
+                if (useBackend === 'cpu' && !cpuGridB.current) return;
+                if (!isRunning) return;
+
+                let frameCount = 0;
+
+                const animate = () => {
+                    if (useBackend === 'gpu' && !gpuRef.current) return;
+                    if (useBackend === 'cpu' && !cpuGridB.current) return;
+
+                    frameCount++;
+
+                    if (useBackend === 'cpu') {
+                        // CPU backend - simple and straightforward
+                        const centerIdx = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2);
+                        const beforeValue = cpuGridB.current ? cpuGridB.current[centerIdx] : 'undefined';
+
+                        stepCPU();
+                        renderFrame();
+
+                        const afterValue = cpuGridB.current ? cpuGridB.current[centerIdx] : 'undefined';
+
+                        // Log CPU simulation state
+                        if (frameCount === 1 || frameCount % 120 === 0) {
+                            const dt = 0.05 * speed;
+                            console.log(`=== FRAME ${frameCount} (CPU) ===`);
+                            console.log(`Parameters: Du=${Du}, Dv=${Dv}, F=${feedRate}, k=${killRate}, dt=${dt}`);
+                            console.log('Mode:', mode);
+                            console.log(`CPU GridB center: before=${beforeValue.toFixed(6)}, after=${afterValue.toFixed(6)}`);
+
+                            // Sample a few more points to check spreading
+                            const offset10 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 10;
+                            const offset20 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 20;
+                            const offset50 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 50;
+                            console.log(`  → GridB values (center, +10px, +20px, +50px): [${cpuGridB.current[centerIdx].toFixed(3)}, ${cpuGridB.current[offset10].toFixed(3)}, ${cpuGridB.current[offset20].toFixed(3)}, ${cpuGridB.current[offset50].toFixed(3)}]`);
+                        }
+                    } else {
+                        // GPU backend
+                        const {
+                            device,
+                            context,
+                            gridABuffer,
+                            gridBBuffer,
+                            nextGridABuffer,
+                            nextGridBBuffer,
+                            grayScottParamsBuffer,
+                            diffusiophoresisPramsBuffer,
+                            renderParamsBuffer,
+                            grayScottPipeline,
+                            diffusiophoresisPipeline,
+                            renderPipeline,
+                            grayScottBindGroup,
+                            diffusiophoresiBindGroup,
+                            renderBindGroup,
+                        } = gpuRef.current;
+
+                        // Run simulation step - smaller timestep for stability
+                        const dt = 0.5 * speed;
+
+                    if (mode === 'turing') {
+                        // Update Gray-Scott params with correct types (u32 for gridSize, f32 for rest)
+                        const paramsData = new ArrayBuffer(24);
+                        const view = new DataView(paramsData);
+                        view.setUint32(0, gridSize, true); // gridSize as u32
+                        view.setFloat32(4, Du, true);
+                        view.setFloat32(8, Dv, true);
+                        view.setFloat32(12, feedRate, true);
+                        view.setFloat32(16, killRate, true);
+                        view.setFloat32(20, dt, true);
+                        device.queue.writeBuffer(grayScottParamsBuffer, 0, paramsData);
+                    } else {
+                        // Update diffusiophoresis params
+                        const paramsData = new ArrayBuffer(20);
+                        const view = new DataView(paramsData);
+                        view.setUint32(0, gridSize, true);
+                        view.setFloat32(4, diffusionCoeff, true);
+                        view.setFloat32(8, gradientStrength, true);
+                        view.setFloat32(12, mobility, true);
+                        view.setFloat32(16, dt, true);
+                        device.queue.writeBuffer(diffusiophoresisPramsBuffer, 0, paramsData);
+                    }
+
+                    const commandEncoder = device.createCommandEncoder();
+
+                    // Single compute pass
+                    if (mode === 'turing') {
+                        const computePass = commandEncoder.beginComputePass();
+                        computePass.setPipeline(grayScottPipeline);
+                        computePass.setBindGroup(0, grayScottBindGroup);
+                        computePass.dispatchWorkgroups(
+                            Math.ceil(gridSize / 8),
+                            Math.ceil(gridSize / 8)
+                        );
+                        computePass.end();
+                    } else {
+                        const computePass = commandEncoder.beginComputePass();
+                        computePass.setPipeline(diffusiophoresisPipeline);
+                        computePass.setBindGroup(0, diffusiophoresiBindGroup);
+                        computePass.dispatchWorkgroups(
+                            Math.ceil(gridSize / 8),
+                            Math.ceil(gridSize / 8)
+                        );
+                        computePass.end();
+                    }
+
+                    // Copy next to current for ping-pong
+                    commandEncoder.copyBufferToBuffer(nextGridABuffer, 0, gridABuffer, 0, gridSize * gridSize * 4);
+                    commandEncoder.copyBufferToBuffer(nextGridBBuffer, 0, gridBBuffer, 0, gridSize * gridSize * 4);
+
+                    // Update render params
+                    const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'grayscale': 2 };
+                    device.queue.writeBuffer(
+                        renderParamsBuffer,
+                        0,
+                        new Uint32Array([gridSize, colorSchemeMap[colorScheme] || 0])
+                    );
+
+                    // Render
+                    const renderPass = commandEncoder.beginRenderPass({
+                        colorAttachments: [{
+                            view: context.getCurrentTexture().createView(),
+                            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                            loadOp: 'clear',
+                            storeOp: 'store',
+                        }],
+                    });
+                    renderPass.setPipeline(renderPipeline);
+                    renderPass.setBindGroup(0, renderBindGroup);
+                    renderPass.draw(6);
+                    renderPass.end();
+
+                    device.queue.submit([commandEncoder.finish()]);
+
+                    // Log simulation state and read back GPU values on first frame
+                    if (frameCount === 1) {
+                        console.log(`=== FRAME ${frameCount} ===`);
+                        console.log(`Parameters: Du=${Du}, Dv=${Dv}, F=${feedRate}, k=${killRate}, dt=${dt}`);
+                        console.log('Mode:', mode);
+
+                        // Read back buffer values to check compute shader output
+                        const readbackBuffer = device.createBuffer({
+                            size: 4 * 4, // 4 floats
+                            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+                        });
+
+                        const centerIdx = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2);
+
+                        const readEncoder = device.createCommandEncoder();
+                        readEncoder.copyBufferToBuffer(gridBBuffer, centerIdx * 4, readbackBuffer, 0, 4);
+                        device.queue.submit([readEncoder.finish()]);
+
+                        readbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+                            const data = new Float32Array(readbackBuffer.getMappedRange());
+                            console.log('GPU GridB center value after Frame 1:', data[0]);
+                            readbackBuffer.unmap();
+                            readbackBuffer.destroy();
+                        });
+                    } else if (frameCount % 120 === 0) {
+                        console.log(`=== FRAME ${frameCount} ===`);
+                        console.log(`Parameters: Du=${Du}, Dv=${Dv}, F=${feedRate}, k=${killRate}, dt=${dt}`);
+
+                        // Read back multiple points to see pattern evolution
+                        const readbackBuffer = device.createBuffer({
+                            size: 20,  // 5 floats
+                            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+                        });
+
+                        const centerIdx = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2);
+                        const offset50 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 50; // 50 pixels right
+                        const offset100 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 100;
+                        const offset150 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 150;
+                        const offset200 = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2) + 200;
+
+                        const readEncoder = device.createCommandEncoder();
+                        readEncoder.copyBufferToBuffer(gridBBuffer, centerIdx * 4, readbackBuffer, 0, 4);
+                        readEncoder.copyBufferToBuffer(gridBBuffer, offset50 * 4, readbackBuffer, 4, 4);
+                        readEncoder.copyBufferToBuffer(gridBBuffer, offset100 * 4, readbackBuffer, 8, 4);
+                        readEncoder.copyBufferToBuffer(gridBBuffer, offset150 * 4, readbackBuffer, 12, 4);
+                        readEncoder.copyBufferToBuffer(gridBBuffer, offset200 * 4, readbackBuffer, 16, 4);
+                        device.queue.submit([readEncoder.finish()]);
+
+                        readbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+                            const data = new Float32Array(readbackBuffer.getMappedRange());
+                            console.log(`  → GridB values (center to +200px): [${data[0].toFixed(3)}, ${data[1].toFixed(3)}, ${data[2].toFixed(3)}, ${data[3].toFixed(3)}, ${data[4].toFixed(3)}]`);
+                            readbackBuffer.unmap();
+                            readbackBuffer.destroy();
+                        });
+                    }
+                    } // End GPU backend
+
+                    animationRef.current = requestAnimationFrame(animate);
+                };
+
+                animationRef.current = requestAnimationFrame(animate);
+
+                return () => {
+                    if (animationRef.current) {
+                        cancelAnimationFrame(animationRef.current);
+                    }
+                };
+            }, [isRunning, mode, useBackend, Du, Dv, feedRate, killRate, diffusionCoeff, gradientStrength, mobility, speed, colorScheme, gridSize]);
+
+            if (gpuError) {
+                return (
+                    <div className="container">
+                        <div className="controls">
+                            <h1>GPU Error</h1>
+                            <div className="error-message">{gpuError}</div>
+                            <p>WebGPU is required for this simulator. Please ensure you're using:</p>
+                            <ul>
+                                <li>Chrome/Edge 113 or later</li>
+                                <li>Safari 18 or later (macOS Sonoma)</li>
+                            </ul>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="container">
+                    <div className="canvas-container">
+                        <h1>Reaction-Diffusion Simulator</h1>
+                        <div className="gpu-badge">{useBackend === 'gpu' ? 'GPU ACCELERATED' : 'CPU MODE'}</div>
+                        <canvas
+                            ref={canvasRef}
+                            width={gridSize}
+                            height={gridSize}
+                        />
+                    </div>
+
+                    <div className="controls">
+                        <div className="control-group">
+                            <label>Backend</label>
+                            <select value={useBackend} onChange={(e) => {
+                                setUseBackend(e.target.value);
+                                setIsRunning(false);
+                                initializeGrids();
+                            }}>
+                                <option value="gpu">GPU (WebGPU)</option>
+                                <option value="cpu">CPU (JavaScript)</option>
+                            </select>
+                        </div>
+
+                        <div className="control-group">
+                            <label>Simulation Mode</label>
+                            <select value={mode} onChange={(e) => { setMode(e.target.value); reset(); }}>
+                                <option value="turing">Turing Patterns (Gray-Scott)</option>
+                                <option value="diffusiophoresis">Diffusiophoresis</option>
+                            </select>
+                        </div>
+
+                        <div className="button-group">
+                            <button onClick={() => setIsRunning(!isRunning)}>
+                                {isRunning ? 'Pause' : 'Play'}
+                            </button>
+                            <button className="secondary" onClick={reset}>Reset</button>
+                        </div>
+
+                        <div className="control-group">
+                            <label>Initial Pattern</label>
+                            <select value={initialPattern} onChange={(e) => {
+                                const newPattern = e.target.value;
+                                setInitialPattern(newPattern);
+                                setIsRunning(false);
+                                initializeGrids(newPattern);
+                            }}>
+                                <option value="center">Center Spot</option>
+                                <option value="random">Random Noise</option>
+                                <option value="grid">Grid</option>
+                                <option value="stripes">Stripes</option>
+                                <option value="corners">Four Corners</option>
+                                <option value="ring">Ring</option>
+                                <option value="diagonal">Diagonal</option>
+                            </select>
+                        </div>
+
+                        {mode === 'turing' && (
+                            <>
+                                <h2>Gray-Scott Parameters</h2>
+
+                                <div className="control-group">
+                                    <label>Presets</label>
+                                    <select onChange={(e) => applyPreset(e.target.value)} defaultValue="spots">
+                                        <option value="spots">Spots (Recommended)</option>
+                                        <option value="stripes">Stripes</option>
+                                        <option value="waves">Waves</option>
+                                        <option value="spirals">Spirals</option>
+                                    </select>
+                                </div>
+
+                                <div className="control-group">
+                                    <label>
+                                        Diffusion Rate U (Du)
+                                        <span className="value-display">{Du.toFixed(4)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.01"
+                                        max="0.3"
+                                        step="0.001"
+                                        value={Du}
+                                        onChange={(e) => setDu(parseFloat(e.target.value))}
+                                    />
+                                </div>
+
+                                <div className="control-group">
+                                    <label>
+                                        Diffusion Rate V (Dv)
+                                        <span className="value-display">{Dv.toFixed(4)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.01"
+                                        max="0.3"
+                                        step="0.001"
+                                        value={Dv}
+                                        onChange={(e) => setDv(parseFloat(e.target.value))}
+                                    />
+                                </div>
+
+                                <div className="control-group">
+                                    <label>
+                                        Feed Rate (F)
+                                        <span className="value-display">{feedRate.toFixed(4)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.01"
+                                        max="0.1"
+                                        step="0.001"
+                                        value={feedRate}
+                                        onChange={(e) => setFeedRate(parseFloat(e.target.value))}
+                                    />
+                                </div>
+
+                                <div className="control-group">
+                                    <label>
+                                        Kill Rate (k)
+                                        <span className="value-display">{killRate.toFixed(4)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.01"
+                                        max="0.1"
+                                        step="0.001"
+                                        value={killRate}
+                                        onChange={(e) => setKillRate(parseFloat(e.target.value))}
+                                    />
+                                </div>
+                            </>
+                        )}
+
+                        {mode === 'diffusiophoresis' && (
+                            <>
+                                <h2>Diffusiophoresis Parameters</h2>
+
+                                <div className="control-group">
+                                    <label>
+                                        Diffusion Coefficient
+                                        <span className="value-display">{diffusionCoeff.toFixed(3)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.01"
+                                        max="0.5"
+                                        step="0.01"
+                                        value={diffusionCoeff}
+                                        onChange={(e) => setDiffusionCoeff(parseFloat(e.target.value))}
+                                    />
+                                </div>
+
+                                <div className="control-group">
+                                    <label>
+                                        Gradient Strength
+                                        <span className="value-display">{gradientStrength.toFixed(3)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="2"
+                                        step="0.05"
+                                        value={gradientStrength}
+                                        onChange={(e) => setGradientStrength(parseFloat(e.target.value))}
+                                    />
+                                </div>
+
+                                <div className="control-group">
+                                    <label>
+                                        Particle Mobility
+                                        <span className="value-display">{mobility.toFixed(3)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={mobility}
+                                        onChange={(e) => setMobility(parseFloat(e.target.value))}
+                                    />
+                                </div>
+                            </>
+                        )}
+
+                        <h2>Visualization</h2>
+
+                        <div className="control-group">
+                            <label>Color Scheme</label>
+                            <select value={colorScheme} onChange={(e) => setColorScheme(e.target.value)}>
+                                <option value="viridis">Viridis</option>
+                                <option value="plasma">Plasma</option>
+                                <option value="grayscale">Grayscale</option>
+                            </select>
+                        </div>
+
+                        <div className="control-group">
+                            <label>
+                                Speed
+                                <span className="value-display">{speed}x</span>
+                            </label>
+                            <input
+                                type="range"
+                                min="1"
+                                max="10"
+                                step="1"
+                                value={speed}
+                                onChange={(e) => setSpeed(parseInt(e.target.value))}
+                            />
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<ReactionDiffusionSimulator />, document.getElementById('root'));
+    </script>
+</body>
+</html>
