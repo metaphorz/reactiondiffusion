@@ -433,6 +433,32 @@
                                 return c0 + c1 * t + c2 * t2;
                             }
 
+                            fn rainbow(t: f32) -> vec3<f32> {
+                                // Rainbow spectrum using HSV to RGB
+                                let h = t * 300.0; // Hue in degrees (0-300)
+                                let s = 1.0;       // Saturation
+                                let v = 1.0;       // Value
+
+                                let c = v * s;
+                                let x = c * (1.0 - abs((h / 60.0) % 2.0 - 1.0));
+                                let m = v - c;
+
+                                var rgb: vec3<f32>;
+                                if (h < 60.0) {
+                                    rgb = vec3<f32>(c, x, 0.0);
+                                } else if (h < 120.0) {
+                                    rgb = vec3<f32>(x, c, 0.0);
+                                } else if (h < 180.0) {
+                                    rgb = vec3<f32>(0.0, c, x);
+                                } else if (h < 240.0) {
+                                    rgb = vec3<f32>(0.0, x, c);
+                                } else {
+                                    rgb = vec3<f32>(x, 0.0, c);
+                                }
+
+                                return rgb + vec3<f32>(m, m, m);
+                            }
+
                             @fragment
                             fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
                                 let gridSize = renderParams.gridSize;
@@ -447,6 +473,8 @@
                                     color = viridis(value);
                                 } else if (renderParams.colorScheme == 1u) {
                                     color = plasma(value);
+                                } else if (renderParams.colorScheme == 2u) {
+                                    color = rainbow(value);
                                 } else {
                                     color = vec3<f32>(value, value, value);
                                 }
@@ -830,7 +858,7 @@
                     } = gpuRef.current;
 
                     // Update render params
-                    const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'grayscale': 2 };
+                    const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'rainbow': 2, 'grayscale': 3 };
                     device.queue.writeBuffer(
                         renderParamsBuffer,
                         0,
@@ -921,9 +949,41 @@
                 return { r: val, g: val, b: val };
             };
 
+            const rainbowColor = (t) => {
+                // Rainbow spectrum: red → orange → yellow → green → cyan → blue → magenta
+                // Using HSV to RGB conversion with hue from 0° (red) to 300° (magenta)
+                const h = t * 300; // Hue in degrees (0-300, avoiding wrap to red)
+                const s = 1.0;      // Full saturation
+                const v = 1.0;      // Full value/brightness
+
+                const c = v * s;
+                const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+                const m = v - c;
+
+                let r, g, b;
+                if (h < 60) {
+                    r = c; g = x; b = 0;
+                } else if (h < 120) {
+                    r = x; g = c; b = 0;
+                } else if (h < 180) {
+                    r = 0; g = c; b = x;
+                } else if (h < 240) {
+                    r = 0; g = x; b = c;
+                } else {
+                    r = x; g = 0; b = c;
+                }
+
+                return {
+                    r: Math.floor((r + m) * 255),
+                    g: Math.floor((g + m) * 255),
+                    b: Math.floor((b + m) * 255)
+                };
+            };
+
             const getColor = (value, scheme) => {
                 if (scheme === 'viridis') return viridisColor(value);
                 if (scheme === 'plasma') return plasmaColor(value);
+                if (scheme === 'rainbow') return rainbowColor(value);
                 return grayscaleColor(value);
             };
 
@@ -1113,7 +1173,7 @@
                     commandEncoder.copyBufferToBuffer(nextGridBBuffer, 0, gridBBuffer, 0, gridSize * gridSize * 4);
 
                     // Update render params
-                    const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'grayscale': 2 };
+                    const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'rainbow': 2, 'grayscale': 3 };
                     device.queue.writeBuffer(
                         renderParamsBuffer,
                         0,
@@ -1431,6 +1491,7 @@
                             <select value={colorScheme} onChange={(e) => setColorScheme(e.target.value)}>
                                 <option value="viridis">Viridis</option>
                                 <option value="plasma">Plasma</option>
+                                <option value="rainbow">Rainbow (Full Spectrum)</option>
                                 <option value="grayscale">Grayscale</option>
                             </select>
                         </div>
