@@ -785,6 +785,14 @@
                     const imageData = ctx.createImageData(gridSize, gridSize);
                     const data = imageData.data;
 
+                    // Sample some values for debugging
+                    const centerIdx = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2);
+                    const sampleValues = {
+                        center: cpuGridB.current[centerIdx],
+                        min: Math.min(...cpuGridB.current),
+                        max: Math.max(...cpuGridB.current)
+                    };
+
                     for (let i = 0; i < gridSize * gridSize; i++) {
                         const b = cpuGridB.current[i];
                         const color = getColor(b, colorScheme);
@@ -794,6 +802,13 @@
                         data[i * 4 + 3] = 255;
                     }
                     ctx.putImageData(imageData, 0, 0);
+
+                    // Log rendering info occasionally
+                    if (!window.renderCallCount) window.renderCallCount = 0;
+                    window.renderCallCount++;
+                    if (window.renderCallCount === 1 || window.renderCallCount % 100 === 0) {
+                        console.log(`🎨 Render #${window.renderCallCount}: GridB range [${sampleValues.min.toFixed(3)}, ${sampleValues.max.toFixed(3)}], center=${sampleValues.center.toFixed(3)}`);
+                    }
                 } else {
                     // GPU rendering using WebGPU
                     const {
