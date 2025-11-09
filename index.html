@@ -824,10 +824,18 @@
 
                     // Sample some values for debugging
                     const centerIdx = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2);
+
+                    // Find min/max without spread operator (avoids stack overflow on large grids)
+                    let minB = cpuGridB.current[0], maxB = cpuGridB.current[0];
+                    for (let i = 0; i < cpuGridB.current.length; i++) {
+                        if (cpuGridB.current[i] < minB) minB = cpuGridB.current[i];
+                        if (cpuGridB.current[i] > maxB) maxB = cpuGridB.current[i];
+                    }
+
                     const sampleValues = {
                         center: cpuGridB.current[centerIdx],
-                        min: Math.min(...cpuGridB.current),
-                        max: Math.max(...cpuGridB.current)
+                        min: minB,
+                        max: maxB
                     };
 
                     for (let i = 0; i < gridSize * gridSize; i++) {
