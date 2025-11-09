@@ -220,6 +220,13 @@
             const [speed, setSpeed] = useState(1);
             const [initialPattern, setInitialPattern] = useState('center');
 
+            // Zoom and pan
+            const [zoom, setZoom] = useState(1.0);
+            const [panX, setPanX] = useState(0);
+            const [panY, setPanY] = useState(0);
+            const isDragging = useRef(false);
+            const lastMousePos = useRef({ x: 0, y: 0 });
+
             // Initialize WebGPU only if using GPU backend
             useEffect(() => {
                 if (useBackend === 'gpu') {
@@ -409,6 +416,9 @@
                             struct RenderParams {
                                 gridSize: u32,
                                 colorScheme: u32,
+                                zoom: f32,
+                                panX: f32,
+                                panY: f32,
                             }
 
                             @group(0) @binding(0) var<storage, read> gridB: array<f32>;
@@ -462,9 +472,24 @@
                             @fragment
                             fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
                                 let gridSize = renderParams.gridSize;
-                                let x = min(u32(input.texCoord.x * f32(gridSize)), gridSize - 1u);
-                                let y = min(u32(input.texCoord.y * f32(gridSize)), gridSize - 1u);
-                                let idx = y * gridSize + x;
+                                let zoom = renderParams.zoom;
+                                let panX = renderParams.panX;
+                                let panY = renderParams.panY;
+
+                                // Calculate visible region based on zoom and pan
+                                let viewWidth = f32(gridSize) / zoom;
+                                let viewHeight = f32(gridSize) / zoom;
+                                let startX = f32(gridSize) / 2.0 - viewWidth / 2.0 + panX;
+                                let startY = f32(gridSize) / 2.0 - viewHeight / 2.0 + panY;
+
+                                // Map texture coordinate to grid position with zoom/pan
+                                let gx = startX + input.texCoord.x * viewWidth;
+                                let gy = startY + input.texCoord.y * viewHeight;
+
+                                // Wrap around edges (periodic boundary)
+                                let wx = u32((gx + f32(gridSize * 1000)) % f32(gridSize));
+                                let wy = u32((gy + f32(gridSize * 1000)) % f32(gridSize));
+                                let idx = wy * gridSize + wx;
 
                                 let value = gridB[idx];
 
@@ -519,7 +544,7 @@
                     });
 
                     const renderParamsBuffer = device.createBuffer({
-                        size: 8, // 2 u32s
+                        size: 20, // 2 u32s + 3 f32s = 8 + 12 = 20 bytes
                         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
                     });
 
@@ -838,13 +863,32 @@
                         max: maxB
                     };
 
-                    for (let i = 0; i < gridSize * gridSize; i++) {
-                        const b = cpuGridB.current[i];
-                        const color = getColor(b, colorScheme);
-                        data[i * 4] = color.r;
-                        data[i * 4 + 1] = color.g;
-                        data[i * 4 + 2] = color.b;
-                        data[i * 4 + 3] = 255;
+                    // Calculate visible region based on zoom and pan
+                    const viewWidth = gridSize / zoom;
+                    const viewHeight = gridSize / zoom;
+                    const startX = Math.floor(gridSize / 2 - viewWidth / 2 + panX);
+                    const startY = Math.floor(gridSize / 2 - viewHeight / 2 + panY);
+
+                    for (let py = 0; py < gridSize; py++) {
+                        for (let px = 0; px < gridSize; px++) {
+                            // Map canvas pixel to grid position with zoom/pan
+                            const gx = Math.floor(startX + px * viewWidth / gridSize);
+                            const gy = Math.floor(startY + py * viewHeight / gridSize);
+
+                            // Wrap around edges (periodic boundary)
+                            const wx = ((gx % gridSize) + gridSize) % gridSize;
+                            const wy = ((gy % gridSize) + gridSize) % gridSize;
+
+                            const idx = wy * gridSize + wx;
+                            const b = cpuGridB.current[idx];
+                            const color = getColor(b, colorScheme);
+
+                            const pixelIdx = (py * gridSize + px) * 4;
+                            data[pixelIdx] = color.r;
+                            data[pixelIdx + 1] = color.g;
+                            data[pixelIdx + 2] = color.b;
+                            data[pixelIdx + 3] = 255;
+                        }
                     }
                     ctx.putImageData(imageData, 0, 0);
 
@@ -865,13 +909,16 @@
                         renderBindGroup,
                     } = gpuRef.current;
 
-                    // Update render params
+                    // Update render params with zoom/pan
                     const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'rainbow': 2, 'grayscale': 3 };
-                    device.queue.writeBuffer(
-                        renderParamsBuffer,
-                        0,
-                        new Uint32Array([gridSize, colorSchemeMap[colorScheme] || 0])
-                    );
+                    const renderParamsData = new ArrayBuffer(20);
+                    const renderView = new DataView(renderParamsData);
+                    renderView.setUint32(0, gridSize, true);
+                    renderView.setUint32(4, colorSchemeMap[colorScheme] || 0, true);
+                    renderView.setFloat32(8, zoom, true);
+                    renderView.setFloat32(12, panX, true);
+                    renderView.setFloat32(16, panY, true);
+                    device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
 
                     const commandEncoder = device.createCommandEncoder();
                     const renderPass = commandEncoder.beginRenderPass({
@@ -894,6 +941,39 @@
             const reset = () => {
                 setIsRunning(false);
                 initializeGrids();
+            };
+
+            const resetView = () => {
+                setZoom(1.0);
+                setPanX(0);
+                setPanY(0);
+            };
+
+            // Mouse event handlers for pan and zoom
+            const handleMouseDown = (e) => {
+                isDragging.current = true;
+                lastMousePos.current = { x: e.clientX, y: e.clientY };
+            };
+
+            const handleMouseMove = (e) => {
+                if (!isDragging.current) return;
+                const dx = e.clientX - lastMousePos.current.x;
+                const dy = e.clientY - lastMousePos.current.y;
+                lastMousePos.current = { x: e.clientX, y: e.clientY };
+
+                // Pan amount scaled by zoom level
+                setPanX(prev => prev - dx / zoom);
+                setPanY(prev => prev - dy / zoom);
+            };
+
+            const handleMouseUp = () => {
+                isDragging.current = false;
+            };
+
+            const handleWheel = (e) => {
+                e.preventDefault();
+                const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
+                setZoom(prev => Math.max(1, Math.min(20, prev * zoomDelta)));
             };
 
             const applyPreset = (preset) => {
@@ -1067,6 +1147,13 @@
                 }
             };
 
+            // Render when zoom/pan changes (even if not running)
+            useEffect(() => {
+                if (useBackend === 'gpu' && !gpuRef.current) return;
+                if (useBackend === 'cpu' && !cpuGridB.current) return;
+                renderFrame();
+            }, [zoom, panX, panY, colorScheme]);
+
             // Animation loop
             useEffect(() => {
                 if (useBackend === 'gpu' && !gpuRef.current) return;
@@ -1180,13 +1267,16 @@
                     commandEncoder.copyBufferToBuffer(nextGridABuffer, 0, gridABuffer, 0, gridSize * gridSize * 4);
                     commandEncoder.copyBufferToBuffer(nextGridBBuffer, 0, gridBBuffer, 0, gridSize * gridSize * 4);
 
-                    // Update render params
+                    // Update render params with zoom/pan
                     const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'rainbow': 2, 'grayscale': 3 };
-                    device.queue.writeBuffer(
-                        renderParamsBuffer,
-                        0,
-                        new Uint32Array([gridSize, colorSchemeMap[colorScheme] || 0])
-                    );
+                    const renderParamsData = new ArrayBuffer(20);
+                    const renderView = new DataView(renderParamsData);
+                    renderView.setUint32(0, gridSize, true);
+                    renderView.setUint32(4, colorSchemeMap[colorScheme] || 0, true);
+                    renderView.setFloat32(8, zoom, true);
+                    renderView.setFloat32(12, panX, true);
+                    renderView.setFloat32(16, panY, true);
+                    device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
 
                     // Render
                     const renderPass = commandEncoder.beginRenderPass({
@@ -1271,7 +1361,7 @@
                         cancelAnimationFrame(animationRef.current);
                     }
                 };
-            }, [isRunning, mode, useBackend, Du, Dv, feedRate, killRate, diffusionCoeff, gradientStrength, mobility, speed, colorScheme, gridSize]);
+            }, [isRunning, mode, useBackend, Du, Dv, feedRate, killRate, diffusionCoeff, gradientStrength, mobility, speed, colorScheme, gridSize, zoom, panX, panY]);
 
             if (gpuError) {
                 return (
@@ -1298,6 +1388,12 @@
                             ref={canvasRef}
                             width={gridSize}
                             height={gridSize}
+                            onMouseDown={handleMouseDown}
+                            onMouseMove={handleMouseMove}
+                            onMouseUp={handleMouseUp}
+                            onMouseLeave={handleMouseUp}
+                            onWheel={handleWheel}
+                            style={{ cursor: isDragging.current ? 'grabbing' : 'grab' }}
                         />
                     </div>
 
@@ -1518,6 +1614,23 @@
                                 onChange={(e) => setSpeed(parseInt(e.target.value))}
                             />
                         </div>
+
+                        <div className="control-group">
+                            <label>
+                                Zoom
+                                <span className="value-display">{zoom.toFixed(1)}x</span>
+                            </label>
+                            <input
+                                type="range"
+                                min="1"
+                                max="20"
+                                step="0.1"
+                                value={zoom}
+                                onChange={(e) => setZoom(parseFloat(e.target.value))}
+                            />
+                        </div>
+
+                        <button className="secondary" onClick={resetView}>Reset View</button>
                     </div>
                 </div>
             );
