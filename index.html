@@ -276,12 +276,11 @@
             const [gridSize] = useState(1024); // High resolution grid for detailed patterns
             const [gpuError, setGpuError] = useState(null);
 
-            // Turing parameters - scaled for 1024 grid
-            // Much smaller timestep needed for stability on fine grid
-            const [Du, setDu] = useState(0.16);
-            const [Dv, setDv] = useState(0.08);
-            const [feedRate, setFeedRate] = useState(0.062);
-            const [killRate, setKillRate] = useState(0.06);
+            // Turing parameters - matched to Jason Webb's defaults for better pattern variety
+            const [Du, setDu] = useState(0.2097);  // dA in Webb's (was 0.16)
+            const [Dv, setDv] = useState(0.105);   // dB in Webb's (was 0.08)
+            const [feedRate, setFeedRate] = useState(0.054);  // f default
+            const [killRate, setKillRate] = useState(0.062);  // k default
 
             // Diffusiophoresis parameters
             const [diffusionCoeff, setDiffusionCoeff] = useState(0.1);
@@ -293,6 +292,7 @@
             const [speed, setSpeed] = useState(1);
             const [initialPattern, setInitialPattern] = useState('random');
             const [highContrast, setHighContrast] = useState(false);
+            const [iterationsPerFrame, setIterationsPerFrame] = useState(5);  // Multiple steps per render
 
             // Zoom and pan
             const [zoom, setZoom] = useState(1.0);
@@ -304,6 +304,11 @@
             // Fullscreen
             const [isFullscreen, setIsFullscreen] = useState(false);
             const dragStartPos = useRef({ x: 0, y: 0 });
+
+            // Mouse painting
+            const [isPainting, setIsPainting] = useState(false);
+            const [brushSize, setBrushSize] = useState(30);
+            const [brushStrength, setBrushStrength] = useState(1.0);
 
             // Initialize WebGPU only if using GPU backend
             useEffect(() => {
@@ -1040,36 +1045,84 @@
                 setPanY(0);
             };
 
-            // Mouse event handlers for pan and zoom
+            // Mouse event handlers for painting and panning
             const handleMouseDown = (e) => {
                 isDragging.current = true;
                 dragStartPos.current = { x: e.clientX, y: e.clientY };
                 lastMousePos.current = { x: e.clientX, y: e.clientY };
+
+                // Start painting if painting mode is enabled
+                if (isPainting) {
+                    paintAtMousePosition(e);
+                }
             };
 
             const handleMouseMove = (e) => {
                 if (!isDragging.current) return;
-                const dx = e.clientX - lastMousePos.current.x;
-                const dy = e.clientY - lastMousePos.current.y;
-                lastMousePos.current = { x: e.clientX, y: e.clientY };
 
-                // Pan amount scaled by zoom level
-                setPanX(prev => prev - dx / zoom);
-                setPanY(prev => prev - dy / zoom);
+                if (isPainting) {
+                    // Paint mode: inject chemical B
+                    paintAtMousePosition(e);
+                } else {
+                    // Pan mode: move viewport
+                    const dx = e.clientX - lastMousePos.current.x;
+                    const dy = e.clientY - lastMousePos.current.y;
+                    lastMousePos.current = { x: e.clientX, y: e.clientY };
+                    setPanX(prev => prev - dx / zoom);
+                    setPanY(prev => prev - dy / zoom);
+                }
             };
 
             const handleMouseUp = (e) => {
-                // Check if this was a click (not a drag)
-                const dx = e.clientX - dragStartPos.current.x;
-                const dy = e.clientY - dragStartPos.current.y;
-                const dragDistance = Math.sqrt(dx * dx + dy * dy);
-
-                // If mouse moved less than 5 pixels, consider it a click
-                if (dragDistance < 5) {
-                    setIsFullscreen(prev => !prev);
-                }
-
                 isDragging.current = false;
+            };
+
+            const paintAtMousePosition = (e) => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+
+                const rect = canvas.getBoundingClientRect();
+                const canvasX = e.clientX - rect.left;
+                const canvasY = e.clientY - rect.top;
+
+                // Convert canvas coordinates to grid coordinates, accounting for zoom/pan
+                const canvasWidth = rect.width;
+                const canvasHeight = rect.height;
+                const gridX = (canvasX / canvasWidth) * gridSize;
+                const gridY = (canvasY / canvasHeight) * gridSize;
+
+                // Account for zoom and pan
+                const viewWidth = gridSize / zoom;
+                const viewHeight = gridSize / zoom;
+                const startX = gridSize / 2 - viewWidth / 2 + panX;
+                const startY = gridSize / 2 - viewHeight / 2 + panY;
+
+                const actualX = Math.floor(startX + (gridX / gridSize) * viewWidth);
+                const actualY = Math.floor(startY + (gridY / gridSize) * viewHeight);
+
+                // Paint in a circular brush area
+                if (useBackend === 'cpu' && cpuGridB.current) {
+                    for (let dy = -brushSize; dy <= brushSize; dy++) {
+                        for (let dx = -brushSize; dx <= brushSize; dx++) {
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist <= brushSize) {
+                                const x = ((actualX + dx) % gridSize + gridSize) % gridSize;
+                                const y = ((actualY + dy) % gridSize + gridSize) % gridSize;
+                                const idx = y * gridSize + x;
+
+                                // Smooth falloff from center
+                                const falloff = 1.0 - (dist / brushSize);
+                                const amount = brushStrength * falloff;
+                                cpuGridB.current[idx] = Math.min(1.0, cpuGridB.current[idx] + amount);
+                            }
+                        }
+                    }
+                    renderFrame();
+                } else if (useBackend === 'gpu' && gpuRef.current) {
+                    // For GPU, we'd need to update the buffer - simpler to just support CPU painting for now
+                    // Could add GPU painting support later with a compute shader
+                    console.log('GPU painting not yet implemented - switch to CPU mode for interactive painting');
+                }
             };
 
             const handleWheel = (e) => {
@@ -1090,31 +1143,107 @@
             }, [isFullscreen]);
 
             const applyPreset = (preset) => {
-                // Gray-Scott parameters - standard diffusion works on all grid sizes
+                // All 24 presets from Jason Webb's reaction-diffusion playground
+                // Diffusion rates fixed to Webb's defaults, varying f and k for different patterns
+                setDu(0.2097);
+                setDv(0.105);
+
                 switch(preset) {
-                    case 'spots':
-                        setDu(0.16);
-                        setDv(0.08);
-                        setFeedRate(0.062);  // Growth regime
-                        setKillRate(0.06);
-                        break;
-                    case 'stripes':
-                        setDu(0.16);
-                        setDv(0.08);
-                        setFeedRate(0.035);  // Maze patterns
-                        setKillRate(0.065);
-                        break;
                     case 'waves':
-                        setDu(0.16);
-                        setDv(0.08);
-                        setFeedRate(0.014);  // Wave patterns
+                        setFeedRate(0.014);
+                        setKillRate(0.045);
+                        break;
+                    case 'moving-spots':
+                        setFeedRate(0.014);
                         setKillRate(0.054);
                         break;
-                    case 'spirals':
-                        setDu(0.16);
-                        setDv(0.08);
-                        setFeedRate(0.018);  // Spiral patterns
+                    case 'spots-loops':
+                        setFeedRate(0.018);
                         setKillRate(0.051);
+                        break;
+                    case 'warring-microbes':
+                        setFeedRate(0.022);
+                        setKillRate(0.059);
+                        break;
+                    case 'pulsating-solitons':
+                        setFeedRate(0.025);
+                        setKillRate(0.06);
+                        break;
+                    case 'chaos':
+                        setFeedRate(0.026);
+                        setKillRate(0.051);
+                        break;
+                    case 'mazes-chaos':
+                        setFeedRate(0.026);
+                        setKillRate(0.055);
+                        break;
+                    case 'mazes':
+                        setFeedRate(0.029);
+                        setKillRate(0.057);
+                        break;
+                    case 'super-resonant-mazes':
+                        setFeedRate(0.03);
+                        setKillRate(0.0565);
+                        break;
+                    case 'self-replicating-spots':
+                        setFeedRate(0.03);
+                        setKillRate(0.063);
+                        break;
+                    case 'spots-worms':
+                        setFeedRate(0.034);
+                        setKillRate(0.0618);
+                        break;
+                    case 'chaos-negatons':
+                        setFeedRate(0.0353);
+                        setKillRate(0.0566);
+                        break;
+                    case 'fingerprints':
+                        setFeedRate(0.037);
+                        setKillRate(0.06);
+                        break;
+                    case 'chaos-turing-negatons':
+                        setFeedRate(0.039);
+                        setKillRate(0.058);
+                        break;
+                    case 'turing-patterns':
+                        setFeedRate(0.042);
+                        setKillRate(0.059);
+                        break;
+                    case 'negatons':
+                        setFeedRate(0.046);
+                        setKillRate(0.0594);
+                        break;
+                    case 'worms-join-maze':
+                        setFeedRate(0.046);
+                        setKillRate(0.063);
+                        break;
+                    case 'worms':
+                        setFeedRate(0.058);
+                        setKillRate(0.065);
+                        break;
+                    case 'u-skate-world':
+                        setFeedRate(0.062);
+                        setKillRate(0.0609);
+                        break;
+                    case 'stable-solitons':
+                        setFeedRate(0.074);
+                        setKillRate(0.064);
+                        break;
+                    case 'worms-loops':
+                        setFeedRate(0.082);
+                        setKillRate(0.06);
+                        break;
+                    case 'precritical-bubbles':
+                        setFeedRate(0.082);
+                        setKillRate(0.059);
+                        break;
+                    case 'positive-bubbles':
+                        setFeedRate(0.098);
+                        setKillRate(0.057);
+                        break;
+                    case 'negative-bubbles':
+                        setFeedRate(0.098);
+                        setKillRate(0.0555);
                         break;
                 }
                 reset();
@@ -1205,8 +1334,8 @@
                     return;
                 }
 
-                // Much smaller timestep for 1024 grid stability
-                const dt = 0.05 * speed;
+                // Timestep matched to Jason Webb's for faster evolution
+                const dt = 1.0 * speed;
 
                 for (let y = 0; y < gridSize; y++) {
                     for (let x = 0; x < gridSize; x++) {
@@ -1294,18 +1423,21 @@
                     frameCount++;
 
                     if (useBackend === 'cpu') {
-                        // CPU backend - simple and straightforward
+                        // CPU backend - run multiple simulation steps per frame for faster evolution
                         const centerIdx = Math.floor(gridSize/2) * gridSize + Math.floor(gridSize/2);
                         const beforeValue = cpuGridB.current ? cpuGridB.current[centerIdx] : 'undefined';
 
-                        stepCPU();
+                        // Run multiple iterations per frame (Webb's technique)
+                        for (let i = 0; i < iterationsPerFrame; i++) {
+                            stepCPU();
+                        }
                         renderFrame();
 
                         const afterValue = cpuGridB.current ? cpuGridB.current[centerIdx] : 'undefined';
 
                         // Log CPU simulation state - more frequent logging for debugging
                         if (frameCount <= 5 || frameCount % 60 === 0) {
-                            const dt = 0.05 * speed;
+                            const dt = 1.0 * speed;
                             console.log(`=== FRAME ${frameCount} (CPU) ===`);
                             console.log(`Parameters: Du=${Du}, Dv=${Dv}, F=${feedRate}, k=${killRate}, dt=${dt}`);
                             console.log('Mode:', mode);
@@ -1337,8 +1469,8 @@
                             renderBindGroup,
                         } = gpuRef.current;
 
-                        // Run simulation step - smaller timestep for stability
-                        const dt = 0.5 * speed;
+                        // Run simulation step - matched to Webb's for faster evolution
+                        const dt = 1.0 * speed;
 
                     if (mode === 'turing') {
                         // Update Gray-Scott params with correct types (u32 for gridSize, f32 for rest)
@@ -1363,32 +1495,37 @@
                         device.queue.writeBuffer(diffusiophoresisPramsBuffer, 0, paramsData);
                     }
 
-                    const commandEncoder = device.createCommandEncoder();
+                    // Run multiple iterations per frame (Webb's technique)
+                    for (let iter = 0; iter < iterationsPerFrame; iter++) {
+                        const commandEncoder = device.createCommandEncoder();
 
-                    // Single compute pass
-                    if (mode === 'turing') {
-                        const computePass = commandEncoder.beginComputePass();
-                        computePass.setPipeline(grayScottPipeline);
-                        computePass.setBindGroup(0, grayScottBindGroup);
-                        computePass.dispatchWorkgroups(
-                            Math.ceil(gridSize / 8),
-                            Math.ceil(gridSize / 8)
-                        );
-                        computePass.end();
-                    } else {
-                        const computePass = commandEncoder.beginComputePass();
-                        computePass.setPipeline(diffusiophoresisPipeline);
-                        computePass.setBindGroup(0, diffusiophoresiBindGroup);
-                        computePass.dispatchWorkgroups(
-                            Math.ceil(gridSize / 8),
-                            Math.ceil(gridSize / 8)
-                        );
-                        computePass.end();
+                        // Compute pass
+                        if (mode === 'turing') {
+                            const computePass = commandEncoder.beginComputePass();
+                            computePass.setPipeline(grayScottPipeline);
+                            computePass.setBindGroup(0, grayScottBindGroup);
+                            computePass.dispatchWorkgroups(
+                                Math.ceil(gridSize / 8),
+                                Math.ceil(gridSize / 8)
+                            );
+                            computePass.end();
+                        } else {
+                            const computePass = commandEncoder.beginComputePass();
+                            computePass.setPipeline(diffusiophoresisPipeline);
+                            computePass.setBindGroup(0, diffusiophoresiBindGroup);
+                            computePass.dispatchWorkgroups(
+                                Math.ceil(gridSize / 8),
+                                Math.ceil(gridSize / 8)
+                            );
+                            computePass.end();
+                        }
+
+                        // Copy next to current for ping-pong
+                        commandEncoder.copyBufferToBuffer(nextGridABuffer, 0, gridABuffer, 0, gridSize * gridSize * 4);
+                        commandEncoder.copyBufferToBuffer(nextGridBBuffer, 0, gridBBuffer, 0, gridSize * gridSize * 4);
+
+                        device.queue.submit([commandEncoder.finish()]);
                     }
-
-                    // Copy next to current for ping-pong
-                    commandEncoder.copyBufferToBuffer(nextGridABuffer, 0, gridABuffer, 0, gridSize * gridSize * 4);
-                    commandEncoder.copyBufferToBuffer(nextGridBBuffer, 0, gridBBuffer, 0, gridSize * gridSize * 4);
 
                     // Update render params with zoom/pan
                     const colorSchemeMap = { 'viridis': 0, 'plasma': 1, 'rainbow': 2, 'grayscale': 3 };
@@ -1402,8 +1539,9 @@
                     renderView.setUint32(20, highContrast ? 1 : 0, true);
                     device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
 
-                    // Render
-                    const renderPass = commandEncoder.beginRenderPass({
+                    // Render (create new command encoder for rendering)
+                    const renderCommandEncoder = device.createCommandEncoder();
+                    const renderPass = renderCommandEncoder.beginRenderPass({
                         colorAttachments: [{
                             view: context.getCurrentTexture().createView(),
                             clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -1416,7 +1554,7 @@
                     renderPass.draw(6);
                     renderPass.end();
 
-                    device.queue.submit([commandEncoder.finish()]);
+                    device.queue.submit([renderCommandEncoder.finish()]);
 
                     // Log simulation state and read back GPU values on first frame
                     if (frameCount === 1) {
@@ -1521,7 +1659,7 @@
                                 style={{ cursor: isDragging.current ? 'grabbing' : 'grab' }}
                             />
                             <div className="fullscreen-hint">
-                                {isFullscreen ? 'Click to exit fullscreen (or press ESC)' : 'Click to enter fullscreen'}
+                                {isPainting ? 'Paint Mode: Click and drag to inject chemical B' : 'Pan Mode: Click and drag to move viewport'}
                             </div>
                         </div>
                     </div>
@@ -1595,25 +1733,46 @@
                                 <h2>Gray-Scott Parameters</h2>
 
                                 <div className="control-group">
-                                    <label>Presets</label>
-                                    <select onChange={(e) => applyPreset(e.target.value)} defaultValue="spots">
-                                        <option value="spots">Spots (Recommended)</option>
-                                        <option value="stripes">Stripes</option>
+                                    <label>Presets (24 patterns from Webb's collection)</label>
+                                    <select onChange={(e) => applyPreset(e.target.value)} defaultValue="">
+                                        <option value="">-- Select a Preset --</option>
                                         <option value="waves">Waves</option>
-                                        <option value="spirals">Spirals</option>
+                                        <option value="moving-spots">Moving Spots</option>
+                                        <option value="spots-loops">Spots and Loops</option>
+                                        <option value="warring-microbes">Warring Microbes</option>
+                                        <option value="pulsating-solitons">Pulsating Solitons</option>
+                                        <option value="chaos">Chaos</option>
+                                        <option value="mazes-chaos">Mazes with Chaos</option>
+                                        <option value="mazes">Mazes</option>
+                                        <option value="super-resonant-mazes">Super-Resonant Mazes</option>
+                                        <option value="self-replicating-spots">Self-Replicating Spots</option>
+                                        <option value="spots-worms">Spots and Worms</option>
+                                        <option value="chaos-negatons">Chaos with Negatons</option>
+                                        <option value="fingerprints">Fingerprints</option>
+                                        <option value="chaos-turing-negatons">Chaos to Turing Negatons</option>
+                                        <option value="turing-patterns">Turing Patterns</option>
+                                        <option value="negatons">Negatons</option>
+                                        <option value="worms-join-maze">Worms Join into Maze</option>
+                                        <option value="worms">Worms</option>
+                                        <option value="u-skate-world">The U-Skate World</option>
+                                        <option value="stable-solitons">Stable Solitons</option>
+                                        <option value="worms-loops">Worms and Loops</option>
+                                        <option value="precritical-bubbles">Precritical Bubbles</option>
+                                        <option value="positive-bubbles">Positive Bubbles</option>
+                                        <option value="negative-bubbles">Negative Bubbles</option>
                                     </select>
                                 </div>
 
                                 <div className="control-group">
                                     <label>
-                                        Diffusion Rate U (Du)
+                                        Diffusion Rate U (Du / dA)
                                         <span className="value-display">{Du.toFixed(4)}</span>
                                     </label>
                                     <input
                                         type="range"
-                                        min="0.01"
-                                        max="0.3"
-                                        step="0.001"
+                                        min="0.2"
+                                        max="0.25"
+                                        step="0.0001"
                                         value={Du}
                                         onChange={(e) => setDu(parseFloat(e.target.value))}
                                     />
@@ -1621,13 +1780,13 @@
 
                                 <div className="control-group">
                                     <label>
-                                        Diffusion Rate V (Dv)
+                                        Diffusion Rate V (Dv / dB)
                                         <span className="value-display">{Dv.toFixed(4)}</span>
                                     </label>
                                     <input
                                         type="range"
                                         min="0.01"
-                                        max="0.3"
+                                        max="0.8"
                                         step="0.001"
                                         value={Dv}
                                         onChange={(e) => setDv(parseFloat(e.target.value))}
@@ -1719,6 +1878,55 @@
 
                         <h2>Visualization</h2>
 
+                        <div className="button-group">
+                            <button
+                                className={isPainting ? 'secondary' : ''}
+                                onClick={() => setIsPainting(!isPainting)}
+                            >
+                                {isPainting ? '🖌️ Paint Mode ON' : '🖌️ Paint Mode OFF'}
+                            </button>
+                            <button
+                                className="secondary"
+                                onClick={() => setIsFullscreen(!isFullscreen)}
+                            >
+                                {isFullscreen ? '⛶ Exit Fullscreen' : '⛶ Fullscreen'}
+                            </button>
+                        </div>
+
+                        {isPainting && (
+                            <>
+                                <div className="control-group">
+                                    <label>
+                                        Brush Size
+                                        <span className="value-display">{brushSize}px</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="5"
+                                        max="100"
+                                        step="1"
+                                        value={brushSize}
+                                        onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                                    />
+                                </div>
+
+                                <div className="control-group">
+                                    <label>
+                                        Brush Strength
+                                        <span className="value-display">{brushStrength.toFixed(2)}</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.1"
+                                        max="2.0"
+                                        step="0.1"
+                                        value={brushStrength}
+                                        onChange={(e) => setBrushStrength(parseFloat(e.target.value))}
+                                    />
+                                </div>
+                            </>
+                        )}
+
                         <div className="control-group">
                             <label>Color Scheme</label>
                             <select value={colorScheme} onChange={(e) => setColorScheme(e.target.value)}>
@@ -1743,7 +1951,7 @@
 
                         <div className="control-group">
                             <label>
-                                Speed
+                                Speed (Timestep Multiplier)
                                 <span className="value-display">{speed}x</span>
                             </label>
                             <input
@@ -1753,6 +1961,21 @@
                                 step="1"
                                 value={speed}
                                 onChange={(e) => setSpeed(parseInt(e.target.value))}
+                            />
+                        </div>
+
+                        <div className="control-group">
+                            <label>
+                                Steps Per Frame
+                                <span className="value-display">{iterationsPerFrame}</span>
+                            </label>
+                            <input
+                                type="range"
+                                min="1"
+                                max="20"
+                                step="1"
+                                value={iterationsPerFrame}
+                                onChange={(e) => setIterationsPerFrame(parseInt(e.target.value))}
                             />
                         </div>
 
