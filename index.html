@@ -978,7 +978,7 @@
                         } = gpuRef.current;
 
                         // Run simulation step - smaller timestep for stability
-                        const dt = 0.05 * speed;
+                        const dt = 0.5 * speed;
 
                     if (mode === 'turing') {
                         // Update Gray-Scott params with correct types (u32 for gridSize, f32 for rest)
