@@ -273,7 +273,7 @@
             const [isRunning, setIsRunning] = useState(false);
             const [mode, setMode] = useState('turing');
             const [useBackend, setUseBackend] = useState('cpu'); // 'cpu' or 'gpu' - default to CPU for testing
-            const [gridSize] = useState(1024); // High resolution grid for detailed patterns
+            const [gridSize] = useState(256); // 256x256 grid matching Webb's implementation for stability
             const [gpuError, setGpuError] = useState(null);
 
             // Turing parameters - matched to Jason Webb's defaults for better pattern variety
@@ -748,7 +748,7 @@
                     gridB[i] = 0.0;
                 }
 
-                const seedRadius = 50; // Larger seed for 1024 grid
+                const seedRadius = 15; // Seed radius for 256 grid
 
                 switch(pattern) {
                     case 'center':
@@ -768,18 +768,19 @@
                         break;
 
                     case 'random':
-                        // Random noise with higher density for pattern formation
+                        // Random noise - sparse and weak to allow pattern formation
+                        // Too much initial B causes system to saturate (solid red)
                         for (let i = 0; i < size; i++) {
-                            if (Math.random() < 0.3) {
-                                gridB[i] = 0.5 + Math.random() * 0.5; // 0.5 to 1.0
+                            if (Math.random() < 0.1) {  // 10% of cells
+                                gridB[i] = Math.random() * 0.3;  // 0 to 0.3 (weak concentration)
                             }
                         }
                         break;
 
                     case 'grid':
                         // Grid pattern
-                        const spacing = 320;
-                        const gridSpotRadius = 40;
+                        const spacing = 80;  // Adjusted for 256 grid
+                        const gridSpotRadius = 10;
                         for (let y = 0; y < gridSize; y += spacing) {
                             for (let x = 0; x < gridSize; x += spacing) {
                                 for (let dy = -gridSpotRadius; dy <= gridSpotRadius; dy++) {
@@ -800,7 +801,7 @@
                         // Vertical stripes
                         for (let y = 0; y < gridSize; y++) {
                             for (let x = 0; x < gridSize; x++) {
-                                if ((x % 240) < 60) {
+                                if ((x % 60) < 15) {  // Adjusted for 256 grid
                                     const idx = y * gridSize + x;
                                     gridB[idx] = 1.0;
                                 }
@@ -810,7 +811,7 @@
 
                     case 'corners':
                         // Four corners
-                        const offset = 200;
+                        const offset = 50;  // Adjusted for 256 grid
                         const corners = [
                             [offset, offset],
                             [gridSize - offset, offset],
@@ -835,8 +836,8 @@
                         // Ring pattern
                         const ringCenterX = Math.floor(gridSize / 2);
                         const ringCenterY = Math.floor(gridSize / 2);
-                        const ringRadius = 200;
-                        const ringWidth = 40;
+                        const ringRadius = 50;  // Adjusted for 256 grid
+                        const ringWidth = 10;
                         for (let y = 0; y < gridSize; y++) {
                             for (let x = 0; x < gridSize; x++) {
                                 const dx = x - ringCenterX;
@@ -854,7 +855,7 @@
                         // Diagonal stripe
                         for (let y = 0; y < gridSize; y++) {
                             for (let x = 0; x < gridSize; x++) {
-                                if (Math.abs((x - y + gridSize) % gridSize) < 60) {
+                                if (Math.abs((x - y + gridSize) % gridSize) < 15) {  // Adjusted for 256 grid
                                     const idx = y * gridSize + x;
                                     gridB[idx] = 1.0;
                                 }
