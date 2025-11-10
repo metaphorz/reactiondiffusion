@@ -1361,8 +1361,8 @@
                     return;
                 }
 
-                // Timestep - very small for debugging numerical stability
-                const dt = 0.1 * speed;
+                // Timestep matching Webb's implementation
+                const dt = 1.0 * speed;
 
                 for (let y = 0; y < gridSize; y++) {
                     for (let x = 0; x < gridSize; x++) {
