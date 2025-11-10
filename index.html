@@ -290,7 +290,7 @@
             // Visualization
             const [colorScheme, setColorScheme] = useState('rainbow');
             const [speed, setSpeed] = useState(1);
-            const [initialPattern, setInitialPattern] = useState('random');
+            const [initialPattern, setInitialPattern] = useState('center');
             const [highContrast, setHighContrast] = useState(false);
             const [iterationsPerFrame, setIterationsPerFrame] = useState(5);  // Multiple steps per render
 
@@ -748,7 +748,7 @@
                     gridB[i] = 0.0;
                 }
 
-                const seedRadius = 15; // Seed radius for 256 grid
+                const seedRadius = 10; // Optimal seed radius for 256 grid (tested)
 
                 switch(pattern) {
                     case 'center':
