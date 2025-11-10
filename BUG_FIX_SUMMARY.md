@@ -70,3 +70,29 @@ Console log showed:
 
 ## Status
 ✅ **FIXED** - Pattern now persists and evolves correctly with GPU acceleration
+
+---
+
+## Second Bug Fix - Timestep Stability (November 2025)
+
+### The Problem
+After previous fixes, the GPU simulation became unstable again with patterns disappearing when simulation started.
+
+### Root Cause
+GPU backend was using `dt = 0.5 * speed` while CPU backend used `dt = 0.05 * speed`. The 10x larger timestep caused numerical instability in the Gray-Scott equations at the 1024×1024 grid resolution.
+
+### The Fix
+Changed GPU timestep to match CPU:
+```javascript
+// Before
+const dt = 0.5 * speed;  // Too large, causes instability
+
+// After
+const dt = 0.05 * speed;  // Stable, matches CPU backend
+```
+
+### Files Modified
+- `index.html:981` - Reduced GPU timestep from 0.5 to 0.05
+
+### Status
+✅ **FIXED** - GPU and CPU backends now use consistent, stable timestep values
