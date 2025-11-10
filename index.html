@@ -768,11 +768,11 @@
                         break;
 
                     case 'random':
-                        // Random noise - sparse and weak to allow pattern formation
-                        // Too much initial B causes system to saturate (solid red)
+                        // Random noise - VERY sparse and weak to allow pattern formation
+                        // Self-replicating patterns need minimal seeds or they overwhelm
                         for (let i = 0; i < size; i++) {
-                            if (Math.random() < 0.1) {  // 10% of cells
-                                gridB[i] = Math.random() * 0.3;  // 0 to 0.3 (weak concentration)
+                            if (Math.random() < 0.02) {  // Only 2% of cells
+                                gridB[i] = 0.05 + Math.random() * 0.1;  // 0.05 to 0.15 (very weak)
                             }
                         }
                         break;
@@ -1335,8 +1335,8 @@
                     return;
                 }
 
-                // Timestep matched to Jason Webb's for faster evolution
-                const dt = 1.0 * speed;
+                // Timestep for numerical stability (reduced from 1.0 for better stability)
+                const dt = 0.5 * speed;
 
                 for (let y = 0; y < gridSize; y++) {
                     for (let x = 0; x < gridSize; x++) {
