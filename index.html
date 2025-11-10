@@ -862,6 +862,32 @@
                             }
                         }
                         break;
+
+                    case 'sparse':
+                        // Sparse seeds - ideal for self-replicating patterns
+                        // Places a few well-separated spots
+                        const seedPositions = [
+                            [gridSize * 0.25, gridSize * 0.25],
+                            [gridSize * 0.75, gridSize * 0.25],
+                            [gridSize * 0.5, gridSize * 0.5],
+                            [gridSize * 0.25, gridSize * 0.75],
+                            [gridSize * 0.75, gridSize * 0.75],
+                        ];
+                        for (const [sx, sy] of seedPositions) {
+                            const cx = Math.floor(sx);
+                            const cy = Math.floor(sy);
+                            for (let dy = -seedRadius; dy <= seedRadius; dy++) {
+                                for (let dx = -seedRadius; dx <= seedRadius; dx++) {
+                                    if (dx * dx + dy * dy <= seedRadius * seedRadius) {
+                                        const x = (cx + dx + gridSize) % gridSize;
+                                        const y = (cy + dy + gridSize) % gridSize;
+                                        const idx = y * gridSize + x;
+                                        gridB[idx] = 1.0;
+                                    }
+                                }
+                            }
+                        }
+                        break;
                 }
 
                 // Log initial values for debugging
@@ -1335,8 +1361,8 @@
                     return;
                 }
 
-                // Timestep for numerical stability (reduced from 1.0 for better stability)
-                const dt = 0.5 * speed;
+                // Timestep - very small for debugging numerical stability
+                const dt = 0.1 * speed;
 
                 for (let y = 0; y < gridSize; y++) {
                     for (let x = 0; x < gridSize; x++) {
@@ -1720,6 +1746,7 @@
                                 initializeGrids(newPattern);
                             }}>
                                 <option value="center">Center Spot</option>
+                                <option value="sparse">Sparse Seeds (best for self-replicating)</option>
                                 <option value="random">Random Noise</option>
                                 <option value="grid">Grid</option>
                                 <option value="stripes">Stripes</option>
