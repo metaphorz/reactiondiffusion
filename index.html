@@ -390,9 +390,10 @@
                                 let a = gridA[idx];
                                 let b = gridB[idx];
 
-                                // Laplacian
-                                let laplaceA = gridA[left] + gridA[right] + gridA[up] + gridA[down] - 4.0 * a;
-                                let laplaceB = gridB[left] + gridB[right] + gridB[up] + gridB[down] - 4.0 * b;
+                                // Laplacian with dx²=0.25 scaling (Webb's implementation)
+                                let dx_squared = 0.25;
+                                let laplaceA = (gridA[left] + gridA[right] + gridA[up] + gridA[down] - 4.0 * a) / dx_squared;
+                                let laplaceB = (gridB[left] + gridB[right] + gridB[up] + gridB[down] - 4.0 * b) / dx_squared;
 
                                 // Gray-Scott equations
                                 let reaction = a * b * b;
@@ -442,8 +443,10 @@
                                 let a = gridA[idx];
                                 let b = gridB[idx];
 
-                                let laplaceA = gridA[left] + gridA[right] + gridA[up] + gridA[down] - 4.0 * a;
-                                let laplaceB = gridB[left] + gridB[right] + gridB[up] + gridB[down] - 4.0 * b;
+                                // Laplacian with dx²=0.25 scaling
+                                let dx_squared = 0.25;
+                                let laplaceA = (gridA[left] + gridA[right] + gridA[up] + gridA[down] - 4.0 * a) / dx_squared;
+                                let laplaceB = (gridB[left] + gridB[right] + gridB[up] + gridB[down] - 4.0 * b) / dx_squared;
 
                                 // Gradient calculation
                                 let gradX = (gridA[right] - gridA[left]) * 0.5;
@@ -1364,6 +1367,10 @@
                 // Timestep matching Webb's implementation
                 const dt = 1.0 * speed;
 
+                // Grid spacing - Webb uses dx=0.5 for proper Laplacian scaling
+                const dx = 0.5;
+                const dx_squared = dx * dx; // 0.25
+
                 for (let y = 0; y < gridSize; y++) {
                     for (let x = 0; x < gridSize; x++) {
                         const idx = y * gridSize + x;
@@ -1375,11 +1382,11 @@
                         const a = cpuGridA.current[idx];
                         const b = cpuGridB.current[idx];
 
-                        // Laplacian calculation
-                        const laplaceA = cpuGridA.current[left] + cpuGridA.current[right] +
-                                        cpuGridA.current[up] + cpuGridA.current[down] - 4 * a;
-                        const laplaceB = cpuGridB.current[left] + cpuGridB.current[right] +
-                                        cpuGridB.current[up] + cpuGridB.current[down] - 4 * b;
+                        // Laplacian calculation with proper dx² scaling
+                        const laplaceA = (cpuGridA.current[left] + cpuGridA.current[right] +
+                                         cpuGridA.current[up] + cpuGridA.current[down] - 4 * a) / dx_squared;
+                        const laplaceB = (cpuGridB.current[left] + cpuGridB.current[right] +
+                                         cpuGridB.current[up] + cpuGridB.current[down] - 4 * b) / dx_squared;
 
                         let newA, newB;
 
