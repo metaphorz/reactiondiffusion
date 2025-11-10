@@ -217,7 +217,7 @@
 
             // Visualization
             const [colorScheme, setColorScheme] = useState('grayscale');
-            const [speed, setSpeed] = useState(1);
+            const [timestep, setTimestep] = useState(0.05);
             const [initialPattern, setInitialPattern] = useState('center');
 
             // Initialize WebGPU only if using GPU backend
@@ -887,8 +887,8 @@
                     return;
                 }
 
-                // Much smaller timestep for 1024 grid stability
-                const dt = 0.05 * speed;
+                // Use timestep directly from slider
+                const dt = timestep;
 
                 for (let y = 0; y < gridSize; y++) {
                     for (let x = 0; x < gridSize; x++) {
@@ -945,7 +945,7 @@
 
                         // Log CPU simulation state
                         if (frameCount === 1 || frameCount % 120 === 0) {
-                            const dt = 0.05 * speed;
+                            const dt = timestep;
                             console.log(`=== FRAME ${frameCount} (CPU) ===`);
                             console.log(`Parameters: Du=${Du}, Dv=${Dv}, F=${feedRate}, k=${killRate}, dt=${dt}`);
                             console.log('Mode:', mode);
@@ -977,8 +977,8 @@
                             renderBindGroup,
                         } = gpuRef.current;
 
-                        // Run simulation step - smaller timestep for stability
-                        const dt = 0.5 * speed;
+                        // Use timestep directly from slider
+                        const dt = timestep;
 
                     if (mode === 'turing') {
                         // Update Gray-Scott params with correct types (u32 for gridSize, f32 for rest)
@@ -1121,7 +1121,7 @@
                         cancelAnimationFrame(animationRef.current);
                     }
                 };
-            }, [isRunning, mode, useBackend, Du, Dv, feedRate, killRate, diffusionCoeff, gradientStrength, mobility, speed, colorScheme, gridSize]);
+            }, [isRunning, mode, useBackend, Du, Dv, feedRate, killRate, diffusionCoeff, gradientStrength, mobility, timestep, colorScheme, gridSize]);
 
             if (gpuError) {
                 return (
@@ -1337,16 +1337,16 @@
 
                         <div className="control-group">
                             <label>
-                                Speed
-                                <span className="value-display">{speed}x</span>
+                                Timestep (dt)
+                                <span className="value-display">{timestep.toFixed(3)}</span>
                             </label>
                             <input
                                 type="range"
-                                min="1"
-                                max="10"
-                                step="1"
-                                value={speed}
-                                onChange={(e) => setSpeed(parseInt(e.target.value))}
+                                min="0.01"
+                                max="0.5"
+                                step="0.01"
+                                value={timestep}
+                                onChange={(e) => setTimestep(parseFloat(e.target.value))}
                             />
                         </div>
                     </div>
